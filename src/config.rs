@@ -1,0 +1,366 @@
+//! User-facing settings: keyboard layout and keyboard shortcuts.
+//!
+//! Settings are read from the first of these that exists, in order:
+//!
+//! 1. `$IRONLAND_COMPOSITOR_CONFIG` (an explicit path, mainly for testing)
+//! 2. `$XDG_CONFIG_HOME/ironland-copositor/config.toml` (or `~/.config/...`)
+//! 3. `/etc/ironland-copositor/config.toml` (written by the NixOS module)
+//!
+//! None of these existing is not an error: the compositor falls back to the
+//! defaults below, which reproduce the shortcuts that used to be hardcoded.
+//! A malformed file is logged and ignored rather than treated as fatal,
+//! since a typo in a config file shouldn't stop the compositor from
+//! starting.
+
+use std::{collections::HashMap, env, fs, path::PathBuf};
+
+use serde::Deserialize;
+use smithay::input::keyboard::{Keysym, ModifiersState, XkbConfig, xkb};
+use tracing::warn;
+
+/// Keyboard layout settings, passed straight through to xkbcommon.
+///
+/// An empty string for any field means "let xkbcommon fall back to its
+/// `XKB_DEFAULT_*` environment variables / built-in default", matching
+/// [`XkbConfig`]'s own default behavior.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct KeyboardSettings {
+    pub rules: String,
+    pub model: String,
+    pub layout: String,
+    pub variant: String,
+    pub options: String,
+}
+
+impl KeyboardSettings {
+    pub fn to_xkb_config(&self) -> XkbConfig<'_> {
+        XkbConfig {
+            rules: &self.rules,
+            model: &self.model,
+            layout: &self.layout,
+            variant: &self.variant,
+            options: if self.options.is_empty() {
+                None
+            } else {
+                Some(self.options.clone())
+            },
+        }
+    }
+}
+
+/// Which modifiers a keybinding requires. Caps lock/num lock/level3-4 shift
+/// are deliberately not part of a binding's identity: only ctrl/alt/shift/
+/// logo distinguish one shortcut from another here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KeyModifiers {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub logo: bool,
+}
+
+impl KeyModifiers {
+    pub fn matches(&self, mods: &ModifiersState) -> bool {
+        self.ctrl == mods.ctrl && self.alt == mods.alt && self.shift == mods.shift && self.logo == mods.logo
+    }
+}
+
+/// A single parsed keybinding: the modifiers/key it fires on, and the name
+/// of the action to run (looked up against the compositor's own action
+/// table, since the set of possible actions is compositor-specific and this
+/// module only knows about parsing).
+#[derive(Debug, Clone)]
+pub struct Keybinding {
+    pub modifiers: KeyModifiers,
+    pub keysym: Keysym,
+    pub action: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct RawConfig {
+    keyboard: KeyboardSettings,
+    terminal: Option<String>,
+    shortcuts: HashMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub keyboard: KeyboardSettings,
+    pub terminal: String,
+    /// action name -> key combos, e.g. `"toggle_launcher" -> ["ctrl+space"]`.
+    /// Always fully populated: entries not overridden by the config file
+    /// keep their built-in default.
+    pub shortcuts: HashMap<String, Vec<String>>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            keyboard: KeyboardSettings::default(),
+            terminal: default_terminal(),
+            shortcuts: default_shortcuts(),
+        }
+    }
+}
+
+fn default_terminal() -> String {
+    "weston-terminal".to_string()
+}
+
+/// The shortcuts the compositor shipped with before it became configurable.
+/// Kept as the baseline so an empty/missing/partial config file still
+/// behaves exactly as before.
+fn default_shortcuts() -> HashMap<String, Vec<String>> {
+    [
+        ("quit", vec!["ctrl+alt+backspace", "ctrl+q"]),
+        ("run_terminal", vec!["ctrl+return"]),
+        ("toggle_launcher", vec!["ctrl+space"]),
+        ("toggle_floating", vec!["ctrl+shift+space"]),
+        ("focus_left", vec!["ctrl+left"]),
+        ("focus_right", vec!["ctrl+right"]),
+        ("focus_up", vec!["ctrl+up"]),
+        ("focus_down", vec!["ctrl+down"]),
+        ("swap_left", vec!["ctrl+shift+left"]),
+        ("swap_right", vec!["ctrl+shift+right"]),
+        ("swap_up", vec!["ctrl+shift+up"]),
+        ("swap_down", vec!["ctrl+shift+down"]),
+        ("resize_left", vec!["ctrl+alt+left"]),
+        ("resize_right", vec!["ctrl+alt+right"]),
+        ("resize_up", vec!["ctrl+alt+up"]),
+        ("resize_down", vec!["ctrl+alt+down"]),
+        ("scale_up", vec!["ctrl+shift+p"]),
+        ("scale_down", vec!["ctrl+shift+m"]),
+        ("toggle_preview", vec!["ctrl+shift+w"]),
+        ("rotate_output", vec!["ctrl+shift+r"]),
+        ("toggle_tint", vec!["ctrl+shift+t"]),
+        ("toggle_decorations", vec!["ctrl+shift+d"]),
+    ]
+    .into_iter()
+    .map(|(name, keys)| (name.to_string(), keys.into_iter().map(String::from).collect()))
+    .collect()
+}
+
+/// All action names the compositor understands, for validation and for the
+/// settings GUI. Kept next to `default_shortcuts` so the two can't drift.
+pub fn known_actions() -> Vec<&'static str> {
+    [
+        "quit",
+        "run_terminal",
+        "toggle_launcher",
+        "toggle_floating",
+        "focus_left",
+        "focus_right",
+        "focus_up",
+        "focus_down",
+        "swap_left",
+        "swap_right",
+        "swap_up",
+        "swap_down",
+        "resize_left",
+        "resize_right",
+        "resize_up",
+        "resize_down",
+        "scale_up",
+        "scale_down",
+        "toggle_preview",
+        "rotate_output",
+        "toggle_tint",
+        "toggle_decorations",
+    ]
+    .to_vec()
+}
+
+fn config_search_path() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if let Ok(explicit) = env::var("IRONLAND_COMPOSITOR_CONFIG") {
+        paths.push(PathBuf::from(explicit));
+    }
+
+    let config_home = env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| env::var("HOME").map(|home| PathBuf::from(home).join(".config")));
+    if let Ok(config_home) = config_home {
+        paths.push(config_home.join("ironland-copositor/config.toml"));
+    }
+
+    paths.push(PathBuf::from("/etc/ironland-copositor/config.toml"));
+
+    paths
+}
+
+impl Config {
+    /// Loads settings from the first config file found on
+    /// [`config_search_path`], falling back to [`Config::default`] if none
+    /// exist or the one found doesn't parse.
+    pub fn load() -> Config {
+        for path in config_search_path() {
+            let contents = match fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => {
+                    warn!(path = %path.display(), %err, "Failed to read compositor config, skipping it");
+                    continue;
+                }
+            };
+
+            let raw: RawConfig = match toml::from_str(&contents) {
+                Ok(raw) => raw,
+                Err(err) => {
+                    warn!(path = %path.display(), %err, "Failed to parse compositor config, using defaults");
+                    return Config::default();
+                }
+            };
+
+            let mut shortcuts = default_shortcuts();
+            shortcuts.extend(raw.shortcuts);
+
+            tracing::info!(path = %path.display(), "Loaded compositor config");
+            return Config {
+                keyboard: raw.keyboard,
+                terminal: raw.terminal.unwrap_or_else(default_terminal),
+                shortcuts,
+            };
+        }
+
+        Config::default()
+    }
+
+    /// Parses every configured binding into `(modifiers, keysym, action
+    /// name)` triples, skipping (with a warning) any binding that doesn't
+    /// parse or whose action name isn't recognized.
+    pub fn parsed_keybindings(&self) -> Vec<Keybinding> {
+        let known = known_actions();
+        let mut bindings = Vec::new();
+
+        for (action, specs) in &self.shortcuts {
+            if !known.contains(&action.as_str()) {
+                warn!(action, "Unknown action in [shortcuts] config, ignoring");
+                continue;
+            }
+
+            for spec in specs {
+                match parse_binding(spec) {
+                    Some((modifiers, keysym)) => bindings.push(Keybinding {
+                        modifiers,
+                        keysym,
+                        action: action.clone(),
+                    }),
+                    None => warn!(action, spec, "Failed to parse keybinding, ignoring"),
+                }
+            }
+        }
+
+        bindings
+    }
+}
+
+/// Parses a binding spec like `"ctrl+shift+left"` into its modifiers and
+/// keysym. The last `+`-separated token is the key; everything before it is
+/// a modifier name (`ctrl`/`control`, `alt`, `shift`, `super`/`logo`/`meta`).
+fn parse_binding(spec: &str) -> Option<(KeyModifiers, Keysym)> {
+    let parts: Vec<&str> = spec.split('+').map(str::trim).filter(|s| !s.is_empty()).collect();
+    let (mod_parts, key_part) = parts.split_last()?;
+
+    let mut modifiers = KeyModifiers::default();
+    for part in key_part {
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => modifiers.ctrl = true,
+            "alt" => modifiers.alt = true,
+            "shift" => modifiers.shift = true,
+            "super" | "logo" | "meta" | "win" => modifiers.logo = true,
+            other => {
+                warn!(modifier = other, spec, "Unknown modifier in keybinding");
+                return None;
+            }
+        }
+    }
+
+    let keysym = parse_key_name(mod_parts, modifiers.shift)?;
+    Some((modifiers, keysym))
+}
+
+/// Resolves a key name to a keysym. Single ASCII letters are special-cased:
+/// xkb has distinct keysyms for the lower- and upper-case forms of a letter
+/// (`a` vs `A`), and it's the upper-case one that a physical key reports
+/// once `modified_sym()` has applied an active Shift — so a binding that
+/// asks for Shift always resolves the letter to its upper-case keysym,
+/// regardless of how the user cased it in the config.
+fn parse_key_name(name: &str, shift: bool) -> Option<Keysym> {
+    let mut chars = name.chars();
+    let keysym = match (chars.next(), chars.next()) {
+        (Some(c), None) if c.is_ascii_alphabetic() => {
+            let letter = if shift { c.to_ascii_uppercase() } else { c.to_ascii_lowercase() };
+            xkb::keysym_from_name(&letter.to_string(), xkb::KEYSYM_NO_FLAGS)
+        }
+        _ => xkb::keysym_from_name(name, xkb::KEYSYM_CASE_INSENSITIVE),
+    };
+
+    if keysym.raw() == 0 { None } else { Some(keysym) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_simple_binding() {
+        let (mods, sym) = parse_binding("ctrl+q").unwrap();
+        assert_eq!(mods, KeyModifiers { ctrl: true, ..Default::default() });
+        assert_eq!(sym, Keysym::q);
+    }
+
+    #[test]
+    fn shift_uppercases_letter_bindings() {
+        let (mods, sym) = parse_binding("ctrl+shift+m").unwrap();
+        assert!(mods.shift);
+        assert_eq!(sym, Keysym::M);
+    }
+
+    #[test]
+    fn parses_named_keys_case_insensitively() {
+        let (_, sym) = parse_binding("ctrl+RETURN").unwrap();
+        assert_eq!(sym, Keysym::Return);
+
+        let (_, sym) = parse_binding("ctrl+alt+backspace").unwrap();
+        assert_eq!(sym, Keysym::BackSpace);
+    }
+
+    #[test]
+    fn rejects_unknown_modifier() {
+        assert!(parse_binding("hyper+q").is_none());
+    }
+
+    #[test]
+    fn rejects_unknown_key() {
+        assert!(parse_binding("ctrl+notarealkey").is_none());
+    }
+
+    #[test]
+    fn every_default_shortcut_parses() {
+        for (action, specs) in default_shortcuts() {
+            for spec in specs {
+                assert!(parse_binding(&spec).is_some(), "default binding {action}={spec} failed to parse");
+            }
+        }
+    }
+
+    #[test]
+    fn partial_shortcuts_override_only_the_named_action() {
+        let mut shortcuts = HashMap::new();
+        shortcuts.insert("quit".to_string(), vec!["ctrl+alt+q".to_string()]);
+        let raw = RawConfig {
+            keyboard: KeyboardSettings::default(),
+            terminal: None,
+            shortcuts,
+        };
+
+        let mut merged = default_shortcuts();
+        merged.extend(raw.shortcuts);
+
+        assert_eq!(merged["quit"], vec!["ctrl+alt+q"]);
+        assert_eq!(merged["toggle_launcher"], vec!["ctrl+space"]);
+    }
+}

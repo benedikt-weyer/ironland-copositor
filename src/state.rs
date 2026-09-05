@@ -28,7 +28,7 @@ use smithay::{
     input::{
         Seat, SeatHandler, SeatState,
         dnd::{DnDGrab, DndGrabHandler, DndTarget, GrabType, Source},
-        keyboard::{Keysym, LedState, XkbConfig},
+        keyboard::{Keysym, LedState},
         pointer::{CursorImageStatus, Focus, PointerHandle},
         tablet::TabletSeatHandler,
     },
@@ -188,6 +188,10 @@ pub struct AnvilState<BackendData: Backend + 'static> {
 
     pub show_window_preview: bool,
     pub launcher: crate::drawing::LauncherState,
+
+    /// Resolved keybinding table, built once at startup from `config::Config`
+    /// (see `input_handler::compile_keybindings`).
+    pub(crate) keybindings: Vec<(crate::config::KeyModifiers, Keysym, crate::input_handler::KeyAction)>,
 }
 
 #[derive(Debug)]
@@ -659,6 +663,9 @@ impl<BackendData: Backend + 'static> AnvilState<BackendData> {
 
         let clock = Clock::new();
 
+        let config = crate::config::Config::load();
+        let keybindings = crate::input_handler::compile_keybindings(&config);
+
         // init wayland clients
         let socket_name = if listen_on_socket {
             let source = ListeningSocketSource::new_auto().unwrap();
@@ -741,7 +748,7 @@ impl<BackendData: Backend + 'static> AnvilState<BackendData> {
         let mut seat = seat_state.new_wl_seat(&dh, seat_name.clone());
 
         let pointer = seat.add_pointer();
-        seat.add_keyboard(XkbConfig::default(), 200, 25)
+        seat.add_keyboard(config.keyboard.to_xkb_config(), 200, 25)
             .expect("Failed to initialize the keyboard");
 
         let keyboard_shortcuts_inhibit_state = KeyboardShortcutsInhibitState::new::<Self>(&dh);
@@ -801,6 +808,7 @@ impl<BackendData: Backend + 'static> AnvilState<BackendData> {
             renderdoc: renderdoc::RenderDoc::new().ok(),
             show_window_preview: false,
             launcher: crate::drawing::LauncherState::default(),
+            keybindings,
         }
     }
 

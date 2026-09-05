@@ -286,7 +286,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                 // should be forwarded to the client or not.
                 if let KeyState::Pressed = state {
                     if !inhibited {
-                        let action = process_keyboard_shortcut(*modifiers, keysym);
+                        let action = process_keyboard_shortcut(&data.keybindings, *modifiers, keysym);
 
                         if action.is_some() {
                             suppressed_keys.push(keysym);
@@ -1472,8 +1472,8 @@ impl AnvilState<UdevData> {
 
 /// Possible results of a keyboard action
 #[allow(dead_code)] // some of these are only read if udev is enabled
-#[derive(Debug)]
-enum KeyAction {
+#[derive(Debug, Clone)]
+pub(crate) enum KeyAction {
     /// Quit the compositor
     Quit,
     /// Trigger a vt-switch
@@ -1527,65 +1527,88 @@ fn launcher_key_action(keysym: Keysym) -> KeyAction {
     }
 }
 
-fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym) -> Option<KeyAction> {
-    if modifiers.ctrl && modifiers.alt && keysym == Keysym::BackSpace || modifiers.ctrl && keysym == Keysym::q
-    {
-        // ctrl+alt+backspace = quit
-        // ctrl + q = quit
-        Some(KeyAction::Quit)
-    } else if (xkb::KEY_XF86Switch_VT_1..=xkb::KEY_XF86Switch_VT_12).contains(&keysym.raw()) {
+/// Turns a config action name (see `config::known_actions`) into the
+/// `KeyAction` it triggers. Kept in sync with `config::known_actions` and
+/// `config::default_shortcuts` by the test at the bottom of `config.rs`.
+fn action_for_name(name: &str, terminal: &str) -> Option<KeyAction> {
+    use crate::shell::tiling::Direction;
+
+    Some(match name {
+        "quit" => KeyAction::Quit,
+        "run_terminal" => KeyAction::Run(terminal.to_string()),
+        "toggle_launcher" => KeyAction::ToggleLauncher,
+        "toggle_floating" => KeyAction::ToggleFloating,
+        "focus_left" => KeyAction::FocusDirection(Direction::Left),
+        "focus_right" => KeyAction::FocusDirection(Direction::Right),
+        "focus_up" => KeyAction::FocusDirection(Direction::Up),
+        "focus_down" => KeyAction::FocusDirection(Direction::Down),
+        "swap_left" => KeyAction::SwapDirection(Direction::Left),
+        "swap_right" => KeyAction::SwapDirection(Direction::Right),
+        "swap_up" => KeyAction::SwapDirection(Direction::Up),
+        "swap_down" => KeyAction::SwapDirection(Direction::Down),
+        "resize_left" => KeyAction::ResizeTiled(Direction::Left),
+        "resize_right" => KeyAction::ResizeTiled(Direction::Right),
+        "resize_up" => KeyAction::ResizeTiled(Direction::Up),
+        "resize_down" => KeyAction::ResizeTiled(Direction::Down),
+        "scale_up" => KeyAction::ScaleUp,
+        "scale_down" => KeyAction::ScaleDown,
+        "toggle_preview" => KeyAction::TogglePreview,
+        "rotate_output" => KeyAction::RotateOutput,
+        "toggle_tint" => KeyAction::ToggleTint,
+        "toggle_decorations" => KeyAction::ToggleDecorations,
+        _ => return None,
+    })
+}
+
+/// Resolves every keybinding from `config` into the table
+/// `keyboard_key_to_action` consults on each key press. Called once at
+/// startup (config changes need a restart to take effect).
+pub(crate) fn compile_keybindings(
+    config: &crate::config::Config,
+) -> Vec<(crate::config::KeyModifiers, Keysym, KeyAction)> {
+    config
+        .parsed_keybindings()
+        .into_iter()
+        .filter_map(|binding| {
+            match action_for_name(&binding.action, &config.terminal) {
+                Some(action) => Some((binding.modifiers, binding.keysym, action)),
+                None => {
+                    // `parsed_keybindings` already validated the name against
+                    // `known_actions`, so this would mean the two tables
+                    // drifted apart - a bug here, not a bad config file.
+                    error!(action = binding.action, "No KeyAction for a known config action name");
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+/// The dynamic shortcuts that aren't representable as a single fixed
+/// modifiers+key combo (a VT switch key or the digit is itself part of the
+/// action) and so aren't part of the configurable keybinding table.
+fn process_dynamic_shortcut(modifiers: ModifiersState, keysym: Keysym) -> Option<KeyAction> {
+    if (xkb::KEY_XF86Switch_VT_1..=xkb::KEY_XF86Switch_VT_12).contains(&keysym.raw()) {
         // VTSwitch
         Some(KeyAction::VtSwitch(
             (keysym.raw() - xkb::KEY_XF86Switch_VT_1 + 1) as i32,
         ))
-    } else if modifiers.ctrl && keysym == Keysym::Return {
-        // run terminal
-        Some(KeyAction::Run("weston-terminal".into()))
-    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::space {
-        // float/re-tile the focused window
-        Some(KeyAction::ToggleFloating)
-    } else if modifiers.ctrl && keysym == Keysym::space {
-        // open/close the application launcher
-        Some(KeyAction::ToggleLauncher)
     } else if modifiers.ctrl && (xkb::KEY_1..=xkb::KEY_9).contains(&keysym.raw()) {
         Some(KeyAction::Screen((keysym.raw() - xkb::KEY_1) as usize))
-    } else if modifiers.ctrl && modifiers.alt && keysym == Keysym::Left {
-        Some(KeyAction::ResizeTiled(crate::shell::tiling::Direction::Left))
-    } else if modifiers.ctrl && modifiers.alt && keysym == Keysym::Right {
-        Some(KeyAction::ResizeTiled(crate::shell::tiling::Direction::Right))
-    } else if modifiers.ctrl && modifiers.alt && keysym == Keysym::Up {
-        Some(KeyAction::ResizeTiled(crate::shell::tiling::Direction::Up))
-    } else if modifiers.ctrl && modifiers.alt && keysym == Keysym::Down {
-        Some(KeyAction::ResizeTiled(crate::shell::tiling::Direction::Down))
-    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::Left {
-        Some(KeyAction::SwapDirection(crate::shell::tiling::Direction::Left))
-    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::Right {
-        Some(KeyAction::SwapDirection(crate::shell::tiling::Direction::Right))
-    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::Up {
-        Some(KeyAction::SwapDirection(crate::shell::tiling::Direction::Up))
-    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::Down {
-        Some(KeyAction::SwapDirection(crate::shell::tiling::Direction::Down))
-    } else if modifiers.ctrl && keysym == Keysym::Left {
-        Some(KeyAction::FocusDirection(crate::shell::tiling::Direction::Left))
-    } else if modifiers.ctrl && keysym == Keysym::Right {
-        Some(KeyAction::FocusDirection(crate::shell::tiling::Direction::Right))
-    } else if modifiers.ctrl && keysym == Keysym::Up {
-        Some(KeyAction::FocusDirection(crate::shell::tiling::Direction::Up))
-    } else if modifiers.ctrl && keysym == Keysym::Down {
-        Some(KeyAction::FocusDirection(crate::shell::tiling::Direction::Down))
-    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::M {
-        Some(KeyAction::ScaleDown)
-    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::P {
-        Some(KeyAction::ScaleUp)
-    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::W {
-        Some(KeyAction::TogglePreview)
-    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::R {
-        Some(KeyAction::RotateOutput)
-    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::T {
-        Some(KeyAction::ToggleTint)
-    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::D {
-        Some(KeyAction::ToggleDecorations)
     } else {
         None
     }
+}
+
+fn process_keyboard_shortcut(
+    keybindings: &[(crate::config::KeyModifiers, Keysym, KeyAction)],
+    modifiers: ModifiersState,
+    keysym: Keysym,
+) -> Option<KeyAction> {
+    process_dynamic_shortcut(modifiers, keysym).or_else(|| {
+        keybindings
+            .iter()
+            .find(|(binding_mods, binding_sym, _)| *binding_sym == keysym && binding_mods.matches(&modifiers))
+            .map(|(_, _, action)| action.clone())
+    })
 }

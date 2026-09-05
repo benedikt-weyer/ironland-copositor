@@ -54,6 +54,24 @@
         cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
           src = craneLib.cleanCargoSource ./.;
         });
+
+        # Fyne (the GUI toolkit `gui-settings` uses) is a cgo package: it
+        # links against GL and, on X11, Xlib/Xcursor/Xrandr/Xinerama/Xi/
+        # Xxf86vm; Wayland/xkbcommon cover running it as a native Wayland
+        # client instead. All of that has to be on hand at both build and
+        # run time, hence buildInputs (not just nativeBuildInputs).
+        guiSettingsBuildInputs = with pkgs; [
+          libGL
+          libglvnd
+          libxkbcommon
+          wayland
+          libx11
+          libxcursor
+          libxrandr
+          libxinerama
+          libxi
+          libxxf86vm
+        ];
       in
       {
         # The real build needs the full source: `resources/*` is pulled in via
@@ -62,6 +80,15 @@
           src = craneLib.path ./.;
           inherit cargoArtifacts;
         });
+
+        packages.settings-gui = pkgs.buildGoModule {
+          pname = "ironland-copositor-settings-gui";
+          version = "0.1.0";
+          src = ./gui-settings;
+          vendorHash = "sha256-IhRYaTLleaHKfqmicA8rYOdiEW41J7CxLIWKld4Ez0Q=";
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = guiSettingsBuildInputs;
+        };
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
@@ -75,7 +102,14 @@
           RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
         };
+
+        devShells.settings-gui = pkgs.mkShell {
+          packages = [ pkgs.go pkgs.gopls pkgs.pkg-config ] ++ guiSettingsBuildInputs;
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath guiSettingsBuildInputs;
+        };
       })) // {
+      nixosModules.default = import ./nix/module.nix;
+
       # A throwaway NixOS VM for exercising the `--tty-udev` backend: it owns
       # its (virtual) DRM/input devices directly, the way real hardware does,
       # so there is no host window manager around to steal modifier keys or
@@ -84,8 +118,19 @@
       nixosConfigurations.compositor-vm = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [
+          self.nixosModules.default
           ({ pkgs, ... }: {
             system.stateVersion = "24.11";
+
+            # Example settings for the compositor's own config system (see
+            # `nix/module.nix` and `src/config.rs`): `weston-terminal` (the
+            # hardcoded default before this became configurable) isn't even
+            # installed in this VM, so without this override ctrl+return
+            # would silently fail to spawn a terminal.
+            services.ironland-copositor.settings = {
+              terminal = "alacritty";
+              keyboard.layout = "us";
+            };
 
             users.users.dev = {
               isNormalUser = true;
@@ -154,11 +199,23 @@
             # no cargo/rustc/cc/pkg-config needed here at all.
             environment.systemPackages = [
               self.packages.x86_64-linux.default
+              self.packages.x86_64-linux.settings-gui
               pkgs.alacritty
               pkgs.firefox
               pkgs.blueman
               pkgs.quickshell
               pkgs.caelestia-shell
+              # Gives the launcher (and caelestia's app grid) a
+              # "Compositor Settings" entry for the Fyne GUI above, rather
+              # than requiring it to be run by exact binary name.
+              (pkgs.makeDesktopItem {
+                name = "ironland-copositor-settings";
+                desktopName = "Compositor Settings";
+                comment = "Configure ironland-copositor's keyboard layout and shortcuts";
+                exec = "${self.packages.x86_64-linux.settings-gui}/bin/gui-settings";
+                icon = "preferences-desktop-keyboard";
+                categories = [ "Settings" ];
+              })
             ];
 
             # Still needed at runtime: some of these libraries (GL/EGL/Vulkan

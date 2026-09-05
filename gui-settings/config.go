@@ -1,0 +1,207 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+
+	"github.com/BurntSushi/toml"
+)
+
+// KeyboardSettings mirrors `config::KeyboardSettings` in the compositor
+// (src/config.rs): fields are passed straight through to xkbcommon, and an
+// empty string means "let xkbcommon fall back to its XKB_DEFAULT_* env vars
+// / built-in default".
+type KeyboardSettings struct {
+	Rules   string `toml:"rules"`
+	Model   string `toml:"model"`
+	Layout  string `toml:"layout"`
+	Variant string `toml:"variant"`
+	Options string `toml:"options"`
+}
+
+// Config mirrors `config::Config` / `config::RawConfig` in the compositor.
+type Config struct {
+	Keyboard  KeyboardSettings    `toml:"keyboard"`
+	Terminal  string              `toml:"terminal"`
+	Shortcuts map[string][]string `toml:"shortcuts"`
+}
+
+// knownActions lists every action the compositor recognizes in
+// [shortcuts], in the same order as `config::known_actions` in
+// src/config.rs. Keep the two in sync: an action missing here just won't
+// be editable in the GUI, and one missing there is silently ignored by the
+// compositor with a warning.
+var knownActions = []string{
+	"quit",
+	"run_terminal",
+	"toggle_launcher",
+	"toggle_floating",
+	"focus_left",
+	"focus_right",
+	"focus_up",
+	"focus_down",
+	"swap_left",
+	"swap_right",
+	"swap_up",
+	"swap_down",
+	"resize_left",
+	"resize_right",
+	"resize_up",
+	"resize_down",
+	"scale_up",
+	"scale_down",
+	"toggle_preview",
+	"rotate_output",
+	"toggle_tint",
+	"toggle_decorations",
+}
+
+// actionLabels gives each action a human-readable name for the GUI.
+var actionLabels = map[string]string{
+	"quit":               "Quit compositor",
+	"run_terminal":       "Open terminal",
+	"toggle_launcher":    "Toggle app launcher",
+	"toggle_floating":    "Toggle floating/tiled",
+	"focus_left":         "Focus window: left",
+	"focus_right":        "Focus window: right",
+	"focus_up":           "Focus window: up",
+	"focus_down":         "Focus window: down",
+	"swap_left":          "Swap window: left",
+	"swap_right":         "Swap window: right",
+	"swap_up":            "Swap window: up",
+	"swap_down":          "Swap window: down",
+	"resize_left":        "Resize tiled window: left",
+	"resize_right":       "Resize tiled window: right",
+	"resize_up":          "Resize tiled window: up",
+	"resize_down":        "Resize tiled window: down",
+	"scale_up":           "Increase output scale",
+	"scale_down":         "Decrease output scale",
+	"toggle_preview":     "Toggle window preview",
+	"rotate_output":      "Rotate output",
+	"toggle_tint":        "Toggle debug tint",
+	"toggle_decorations": "Toggle window decorations",
+}
+
+// defaultShortcuts is the baseline the compositor falls back to for any
+// action not overridden in the config file. Mirrors
+// `config::default_shortcuts` in src/config.rs.
+func defaultShortcuts() map[string][]string {
+	return map[string][]string{
+		"quit":               {"ctrl+alt+backspace", "ctrl+q"},
+		"run_terminal":       {"ctrl+return"},
+		"toggle_launcher":    {"ctrl+space"},
+		"toggle_floating":    {"ctrl+shift+space"},
+		"focus_left":         {"ctrl+left"},
+		"focus_right":        {"ctrl+right"},
+		"focus_up":           {"ctrl+up"},
+		"focus_down":         {"ctrl+down"},
+		"swap_left":          {"ctrl+shift+left"},
+		"swap_right":         {"ctrl+shift+right"},
+		"swap_up":            {"ctrl+shift+up"},
+		"swap_down":          {"ctrl+shift+down"},
+		"resize_left":        {"ctrl+alt+left"},
+		"resize_right":       {"ctrl+alt+right"},
+		"resize_up":          {"ctrl+alt+up"},
+		"resize_down":        {"ctrl+alt+down"},
+		"scale_up":           {"ctrl+shift+p"},
+		"scale_down":         {"ctrl+shift+m"},
+		"toggle_preview":     {"ctrl+shift+w"},
+		"rotate_output":      {"ctrl+shift+r"},
+		"toggle_tint":        {"ctrl+shift+t"},
+		"toggle_decorations": {"ctrl+shift+d"},
+	}
+}
+
+func defaultConfig() Config {
+	return Config{
+		Terminal:  "weston-terminal",
+		Shortcuts: defaultShortcuts(),
+	}
+}
+
+// userConfigPath is where this GUI saves settings: the same
+// `$XDG_CONFIG_HOME`/`~/.config` location the compositor checks before
+// falling back to `/etc/ironland-copositor/config.toml`, and one a normal
+// user can write without root.
+func userConfigPath() (string, error) {
+	configHome := os.Getenv("XDG_CONFIG_HOME")
+	if configHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		configHome = filepath.Join(home, ".config")
+	}
+	return filepath.Join(configHome, "ironland-copositor", "config.toml"), nil
+}
+
+// configSearchPath mirrors `config::config_search_path` in src/config.rs:
+// the same explicit-override env var, the same user config path, then the
+// system-wide file the NixOS module writes.
+func configSearchPath() []string {
+	var paths []string
+	if explicit := os.Getenv("IRONLAND_COMPOSITOR_CONFIG"); explicit != "" {
+		paths = append(paths, explicit)
+	}
+	if userPath, err := userConfigPath(); err == nil {
+		paths = append(paths, userPath)
+	}
+	paths = append(paths, "/etc/ironland-copositor/config.toml")
+	return paths
+}
+
+// loadConfig returns the settings that would be active if the compositor
+// started right now (the first config file found on configSearchPath,
+// merged over the built-in defaults), plus the path it came from - or ""
+// if none of the candidate files exist yet.
+func loadConfig() (Config, string) {
+	cfg := defaultConfig()
+
+	for _, path := range configSearchPath() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		var raw Config
+		if _, err := toml.Decode(string(data), &raw); err != nil {
+			// Malformed file: same as the compositor, fall back to defaults
+			// rather than erroring out.
+			return defaultConfig(), ""
+		}
+
+		if raw.Terminal != "" {
+			cfg.Terminal = raw.Terminal
+		}
+		cfg.Keyboard = raw.Keyboard
+		for action, keys := range raw.Shortcuts {
+			cfg.Shortcuts[action] = keys
+		}
+		return cfg, path
+	}
+
+	return cfg, ""
+}
+
+// saveConfig writes cfg to the user's config file, creating its parent
+// directory if needed, and returns the path it wrote to.
+func saveConfig(cfg Config) (string, error) {
+	path, err := userConfigPath()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
+		return "", err
+	}
+	return path, nil
+}

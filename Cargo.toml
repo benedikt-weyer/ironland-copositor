@@ -17,6 +17,8 @@ thiserror = "1"
 xcursor = "0.3.3"
 xkbcommon = "0.8.0"
 profiling = "1.0"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.5"
 
 [dependencies.smithay]
 git = "https://github.com/Smithay/smithay.git"
