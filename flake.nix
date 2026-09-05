@@ -37,6 +37,7 @@
           libgbm
           libdisplay-info
           vulkan-loader
+          pixman
         ];
       in
       {
