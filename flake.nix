@@ -7,9 +7,10 @@
     # pull the last compatible build (0.2.0) from an older channel for that one package.
     nixpkgs-old.url = "github:NixOS/nixpkgs/nixos-24.11";
     flake-utils.url = "github:numtide/flake-utils";
+    crane.url = "github:ipetkov/crane";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-old, flake-utils }:
+  outputs = { self, nixpkgs, nixpkgs-old, flake-utils, crane }:
     let
       perSystemBuildInputs = pkgs: with pkgs; [
         wayland
@@ -42,18 +43,25 @@
         ];
 
         buildInputs = perSystemBuildInputs pkgs;
+
+        craneLib = crane.mkLib pkgs;
+        commonArgs = { inherit nativeBuildInputs buildInputs; };
+        # Compiles just the dependency graph (smithay and the rest) against a
+        # dummy stub of our own crate. `cleanCargoSource` keeps only
+        # Cargo.toml/Cargo.lock/*.rs, so this derivation's hash - and Nix's
+        # cache of it - is untouched by editing our source (the dummy stub
+        # never reads `resources/`, so stripping it here is fine).
+        cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
+          src = craneLib.cleanCargoSource ./.;
+        });
       in
       {
-        packages.default = pkgs.rustPlatform.buildRustPackage {
-          pname = "ironland-copositor";
-          version = "0.1.0";
-          src = ./.;
-          cargoLock = {
-            lockFile = ./Cargo.lock;
-            allowBuiltinFetchGit = true;
-          };
-          inherit nativeBuildInputs buildInputs;
-        };
+        # The real build needs the full source: `resources/*` is pulled in via
+        # `include_bytes!`, which `cleanCargoSource` above would strip.
+        packages.default = craneLib.buildPackage (commonArgs // {
+          src = craneLib.path ./.;
+          inherit cargoArtifacts;
+        });
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
@@ -84,20 +92,31 @@
               extraGroups = [ "wheel" "video" "input" "render" ];
               initialPassword = "dev";
             };
-            services.getty.autologinUser = "dev";
             security.sudo.wheelNeedsPassword = false;
 
-            # Autologin on tty1 already gives `dev` a proper logind session
-            # (which is what libseat needs), so just launch the compositor
-            # straight from that login shell instead of dropping to a prompt
-            # first. Not `exec`'d: if the compositor exits (Logo+Q, a crash),
-            # you land back at a shell to look around instead of relaunching
-            # in a loop.
-            environment.loginShellInit = ''
-              if [ "$(tty)" = "/dev/tty1" ] && [ "$USER" = "dev" ]; then
-                ironland-copositor --tty-udev
-              fi
+            # Populates /run/opengl-driver, which is where Mesa's GBM backend
+            # (dri_gbm.so) looks for its driver by NixOS convention. Without
+            # this the udev backend fails at GBM device creation.
+            hardware.graphics.enable = true;
+
+            # greetd manages the VT/session lifecycle properly (PAM session,
+            # logind registration) instead of a hand-rolled getty+shell hack.
+            # tuigreet is just the login prompt; on successful auth it hands
+            # off to `--cmd` as the actual session command. A real script
+            # file (rather than a nested-quotes command string) sidesteps
+            # both greetd's config parser and TOML's own quoting corner
+            # cases.
+            environment.etc."ironland-launch.sh".source = pkgs.writeShellScript "ironland-launch" ''
+              ironland-copositor --tty-udev
             '';
+
+            services.greetd = {
+              enable = true;
+              settings.default_session = {
+                command = "${pkgs.tuigreet}/bin/tuigreet --remember --remember-session --cmd /etc/ironland-launch.sh";
+                user = "greeter";
+              };
+            };
 
             # Plain console only: no display manager, no host compositor of any
             # kind, so the udev backend has an uncontested seat and DRM master.
@@ -118,7 +137,23 @@
               virtualisation.memorySize = 4096;
               virtualisation.cores = 4;
               virtualisation.graphics = true;
-              virtualisation.qemu.options = [ "-vga virtio" ];
+              # Not `-vga virtio`: that's a legacy-VGA-compatible variant of
+              # virtio-gpu that doesn't properly support the atomic KMS API
+              # smithay requires, causing "unable to become drm master" /
+              # atomic-commit EINVAL errors. A plain virtio-gpu device (no
+              # VGA compatibility shim) does support atomic modesetting.
+              #
+              # The `-gl` variant (with a GL-enabled display) is needed on top
+              # of that: plain virtio-gpu-pci exposes no DRM render node at
+              # all (GBM allocation fails with NoRenderNode), only the `-gl`
+              # (virgl) variant registers one. This works fine with pure
+              # software rendering on the host, no real GPU passthrough
+              # needed.
+              virtualisation.qemu.options = [
+                "-vga none"
+                "-device virtio-gpu-gl-pci"
+                "-display gtk,gl=on"
+              ];
               # Handy for looking at source/config from inside the VM; not
               # needed to run the compositor itself, which is preinstalled.
               virtualisation.sharedDirectories.project = {

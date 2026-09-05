@@ -15,4 +15,12 @@ fi
 
 echo "Booting the VM. The compositor autostarts on login as 'dev'."
 echo
+
+# The guest's virtio-gpu-gl display needs a working GL context on the *host*
+# to composite into the QEMU window. If the host's Mesa can't find a hardware
+# DRI driver for your GPU (as seen here), that context creation silently
+# fails and the window comes up blank. Forcing software rendering sidesteps
+# hardware driver detection entirely.
+export LIBGL_ALWAYS_SOFTWARE=1
+
 exec "${runner[0]}" "$@"
