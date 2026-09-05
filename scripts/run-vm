@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+export IRONLAND_VM_PROJECT_DIR="$PWD"
+export IRONLAND_VM_CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+
+out="$(mktemp -d)/vm"
+nix build --impure .#nixosConfigurations.compositor-vm.config.system.build.vm -o "$out"
+
+runner=("$out"/bin/run-*-vm)
+if [ ! -e "${runner[0]}" ]; then
+  echo "error: no run-*-vm script found in $out/bin" >&2
+  exit 1
+fi
+
+echo "Booting the VM. Once it auto-logs in as 'dev':"
+echo "  cd project && cargo run -- --tty-udev"
+echo
+exec "${runner[0]}" "$@"
