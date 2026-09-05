@@ -35,7 +35,7 @@ use crate::{
 
 use super::{
     FullscreenSurface, PointerMoveSurfaceGrab, PointerResizeSurfaceGrab, ResizeData, ResizeEdge, ResizeState,
-    SurfaceData, WindowElement, fullscreen_output_geometry, place_new_window,
+    SurfaceData, WindowElement, fullscreen_output_geometry, place_new_window, tiling,
 };
 
 impl<BackendData: Backend> XdgShellHandler for AnvilState<BackendData> {
@@ -48,7 +48,11 @@ impl<BackendData: Backend> XdgShellHandler for AnvilState<BackendData> {
         // of a xdg_surface has to be sent during the commit if
         // the surface is not already configured
         let window = WindowElement(Window::new_wayland_window(surface.clone()));
-        place_new_window(&mut self.space, self.pointer.current_location(), &window, true);
+        if tiling::should_tile(&window) {
+            tiling::tile_new_window(self, &window, self.pointer.current_location());
+        } else {
+            place_new_window(&mut self.space, self.pointer.current_location(), &window, true);
+        }
 
         compositor::add_post_commit_hook(surface.wl_surface(), |state: &mut Self, _, surface| {
             handle_toplevel_commit(&mut state.space, surface);
@@ -115,6 +119,10 @@ impl<BackendData: Backend> XdgShellHandler for AnvilState<BackendData> {
                     tracing::info!("different surface");
                     return;
                 }
+
+                // Resizing a tiled window pulls it out into floating, like Hyprland.
+                tiling::untile_window(self, &window);
+
                 let geometry = window.geometry();
                 let loc = self.space.element_location(&window).unwrap();
                 let (initial_window_location, initial_window_size) = (loc, geometry.size);
@@ -168,6 +176,9 @@ impl<BackendData: Backend> XdgShellHandler for AnvilState<BackendData> {
         {
             return;
         }
+
+        // Resizing a tiled window pulls it out into floating, like Hyprland.
+        tiling::untile_window(self, &window);
 
         let geometry = window.geometry();
         let loc = self.space.element_location(&window).unwrap();
@@ -449,6 +460,9 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                     return;
                 }
 
+                // Dragging a tiled window pulls it out into floating, like Hyprland.
+                tiling::untile_window(self, &window);
+
                 let mut initial_window_location = self.space.element_location(&window).unwrap();
 
                 // If surface is maximized then unmaximize it
@@ -514,6 +528,9 @@ impl<BackendData: Backend> AnvilState<BackendData> {
         {
             return;
         }
+
+        // Dragging a tiled window pulls it out into floating, like Hyprland.
+        tiling::untile_window(self, &window);
 
         let mut initial_window_location = self.space.element_location(&window).unwrap();
 

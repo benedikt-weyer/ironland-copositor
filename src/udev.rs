@@ -543,6 +543,7 @@ pub fn run_udev() {
             state.running.store(false, Ordering::SeqCst);
         } else {
             state.space.refresh();
+            crate::shell::tiling::cleanup_dead(&mut state);
             state.popups.cleanup();
             display_handle.flush_clients().unwrap();
         }

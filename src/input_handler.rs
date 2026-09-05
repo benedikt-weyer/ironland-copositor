@@ -158,6 +158,26 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                 }
             }
 
+            KeyAction::ToggleFloating => {
+                if let Some(keyboard) = self.seat.get_keyboard() {
+                    if let Some(crate::focus::KeyboardFocusTarget::Window(w)) = keyboard.current_focus() {
+                        crate::shell::tiling::toggle_floating(self, &crate::shell::WindowElement(w));
+                    }
+                }
+            }
+
+            KeyAction::FocusDirection(dir) => {
+                crate::shell::tiling::focus_direction(self, dir);
+            }
+
+            KeyAction::SwapDirection(dir) => {
+                crate::shell::tiling::swap_direction(self, dir);
+            }
+
+            KeyAction::ResizeTiled(dir) => {
+                crate::shell::tiling::resize_tiled(self, dir);
+            }
+
             _ => unreachable!(
                 "Common key action handler encountered backend specific action {:?}",
                 action
@@ -620,6 +640,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                     output.change_current_state(None, None, Some(Scale::Fractional(new_scale)), None);
 
                     crate::shell::fixup_positions(&mut self.space, self.pointer.current_location());
+                    crate::shell::tiling::retile_all_outputs(self);
                     self.backend_data.reset_buffers(&output);
                 }
 
@@ -636,6 +657,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                     output.change_current_state(None, None, Some(Scale::Fractional(new_scale)), None);
 
                     crate::shell::fixup_positions(&mut self.space, self.pointer.current_location());
+                    crate::shell::tiling::retile_all_outputs(self);
                     self.backend_data.reset_buffers(&output);
                 }
 
@@ -661,6 +683,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                     tracing::info!(?current_transform, ?new_transform, output = ?output.name(), "changing output transform");
                     output.change_current_state(None, Some(new_transform), None, None);
                     crate::shell::fixup_positions(&mut self.space, self.pointer.current_location());
+                    crate::shell::tiling::retile_all_outputs(self);
                     self.backend_data.reset_buffers(&output);
                 }
 
@@ -676,7 +699,11 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                     | KeyAction::LauncherUp
                     | KeyAction::LauncherDown
                     | KeyAction::LauncherActivate
-                    | KeyAction::LauncherClose => self.process_common_key_action(action),
+                    | KeyAction::LauncherClose
+                    | KeyAction::ToggleFloating
+                    | KeyAction::FocusDirection(_)
+                    | KeyAction::SwapDirection(_)
+                    | KeyAction::ResizeTiled(_) => self.process_common_key_action(action),
 
                     _ => tracing::warn!(
                         ?action,
@@ -808,6 +835,7 @@ impl AnvilState<UdevData> {
                         let pointer_location = output_location + pointer_output_location;
 
                         crate::shell::fixup_positions(&mut self.space, pointer_location);
+                        crate::shell::tiling::retile_all_outputs(self);
                         let pointer = self.pointer.clone();
                         let under = self.surface_under(pointer_location);
                         pointer.motion(
@@ -847,6 +875,7 @@ impl AnvilState<UdevData> {
                         let pointer_location = output_location + pointer_output_location;
 
                         crate::shell::fixup_positions(&mut self.space, pointer_location);
+                        crate::shell::tiling::retile_all_outputs(self);
                         let pointer = self.pointer.clone();
                         let under = self.surface_under(pointer_location);
                         pointer.motion(
@@ -884,6 +913,7 @@ impl AnvilState<UdevData> {
                         };
                         output.change_current_state(None, Some(new_transform), None, None);
                         crate::shell::fixup_positions(&mut self.space, self.pointer.current_location());
+                        crate::shell::tiling::retile_all_outputs(self);
                         self.backend_data.reset_buffers(&output);
                     }
                 }
@@ -905,7 +935,11 @@ impl AnvilState<UdevData> {
                     | KeyAction::LauncherUp
                     | KeyAction::LauncherDown
                     | KeyAction::LauncherActivate
-                    | KeyAction::LauncherClose => self.process_common_key_action(action),
+                    | KeyAction::LauncherClose
+                    | KeyAction::ToggleFloating
+                    | KeyAction::FocusDirection(_)
+                    | KeyAction::SwapDirection(_)
+                    | KeyAction::ResizeTiled(_) => self.process_common_key_action(action),
 
                     _ => unreachable!(),
                 },
@@ -1424,6 +1458,14 @@ enum KeyAction {
     RotateOutput,
     ToggleTint,
     ToggleDecorations,
+    /// Float or re-tile the focused window
+    ToggleFloating,
+    /// Move keyboard focus to the tiled window in a direction
+    FocusDirection(crate::shell::tiling::Direction),
+    /// Swap the focused tiled window with its neighbor in a direction
+    SwapDirection(crate::shell::tiling::Direction),
+    /// Grow the focused tiled window towards a direction
+    ResizeTiled(crate::shell::tiling::Direction),
     /// Open or close the application launcher
     ToggleLauncher,
     /// Append a character to the launcher's search query
@@ -1469,11 +1511,38 @@ fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym) -> Optio
     } else if modifiers.ctrl && keysym == Keysym::Return {
         // run terminal
         Some(KeyAction::Run("weston-terminal".into()))
+    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::space {
+        // float/re-tile the focused window
+        Some(KeyAction::ToggleFloating)
     } else if modifiers.ctrl && keysym == Keysym::space {
         // open/close the application launcher
         Some(KeyAction::ToggleLauncher)
     } else if modifiers.ctrl && (xkb::KEY_1..=xkb::KEY_9).contains(&keysym.raw()) {
         Some(KeyAction::Screen((keysym.raw() - xkb::KEY_1) as usize))
+    } else if modifiers.ctrl && modifiers.alt && keysym == Keysym::Left {
+        Some(KeyAction::ResizeTiled(crate::shell::tiling::Direction::Left))
+    } else if modifiers.ctrl && modifiers.alt && keysym == Keysym::Right {
+        Some(KeyAction::ResizeTiled(crate::shell::tiling::Direction::Right))
+    } else if modifiers.ctrl && modifiers.alt && keysym == Keysym::Up {
+        Some(KeyAction::ResizeTiled(crate::shell::tiling::Direction::Up))
+    } else if modifiers.ctrl && modifiers.alt && keysym == Keysym::Down {
+        Some(KeyAction::ResizeTiled(crate::shell::tiling::Direction::Down))
+    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::Left {
+        Some(KeyAction::SwapDirection(crate::shell::tiling::Direction::Left))
+    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::Right {
+        Some(KeyAction::SwapDirection(crate::shell::tiling::Direction::Right))
+    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::Up {
+        Some(KeyAction::SwapDirection(crate::shell::tiling::Direction::Up))
+    } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::Down {
+        Some(KeyAction::SwapDirection(crate::shell::tiling::Direction::Down))
+    } else if modifiers.ctrl && keysym == Keysym::Left {
+        Some(KeyAction::FocusDirection(crate::shell::tiling::Direction::Left))
+    } else if modifiers.ctrl && keysym == Keysym::Right {
+        Some(KeyAction::FocusDirection(crate::shell::tiling::Direction::Right))
+    } else if modifiers.ctrl && keysym == Keysym::Up {
+        Some(KeyAction::FocusDirection(crate::shell::tiling::Direction::Up))
+    } else if modifiers.ctrl && keysym == Keysym::Down {
+        Some(KeyAction::FocusDirection(crate::shell::tiling::Direction::Down))
     } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::M {
         Some(KeyAction::ScaleDown)
     } else if modifiers.ctrl && modifiers.shift && keysym == Keysym::P {

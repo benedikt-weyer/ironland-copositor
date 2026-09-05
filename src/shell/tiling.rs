@@ -1,0 +1,569 @@
+//! Automatic BSP ("dwindle"-style) tiling, similar to Hyprland's default layout.
+//!
+//! Each output owns its own tree of splits. Every tiled window is a leaf; mapping a
+//! new window splits the currently focused leaf in two, and closing/untiling a
+//! window collapses its sibling back into the parent's slot. Windows can be
+//! individually floated (`toggle_floating`) to opt out of the layout entirely.
+
+use std::cell::RefCell;
+
+use smithay::{
+    desktop::{Space, layer_map_for_output},
+    output::Output,
+    utils::{IsAlive, Logical, Point, Rectangle, SERIAL_COUNTER},
+    wayland::{compositor::with_states, shell::xdg::SurfaceCachedState},
+};
+
+use crate::{
+    focus::KeyboardFocusTarget,
+    state::{AnvilState, Backend},
+};
+
+use super::WindowElement;
+
+/// Gap between tiled windows, and between tiled windows and the output edges.
+const GAP: i32 = 8;
+/// How much a keyboard-driven resize changes a split's ratio per key press.
+const RESIZE_STEP: f32 = 0.05;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+enum Node {
+    Leaf(WindowElement),
+    Split {
+        /// `true` = children sit side by side (a split along x); `false` = stacked (split along y).
+        vertical: bool,
+        /// Fraction of the area given to `a`.
+        ratio: f32,
+        a: Box<Node>,
+        b: Box<Node>,
+    },
+}
+
+#[derive(Default)]
+pub struct TilingLayout {
+    root: Option<Node>,
+    /// The most recently inserted/targeted leaf, used as the split target when
+    /// there is no focused window to split against.
+    last: Option<WindowElement>,
+}
+
+impl TilingLayout {
+    pub fn is_empty(&self) -> bool {
+        self.root.is_none()
+    }
+
+    pub fn contains(&self, window: &WindowElement) -> bool {
+        fn walk(node: &Node, window: &WindowElement) -> bool {
+            match node {
+                Node::Leaf(w) => w == window,
+                Node::Split { a, b, .. } => walk(a, window) || walk(b, window),
+            }
+        }
+        self.root.as_ref().is_some_and(|n| walk(n, window))
+    }
+
+    pub fn windows(&self) -> Vec<WindowElement> {
+        fn walk(node: &Node, out: &mut Vec<WindowElement>) {
+            match node {
+                Node::Leaf(w) => out.push(w.clone()),
+                Node::Split { a, b, .. } => {
+                    walk(a, out);
+                    walk(b, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        if let Some(root) = &self.root {
+            walk(root, &mut out);
+        }
+        out
+    }
+
+    /// Insert `window`, splitting the leaf for `target` (or the last-touched
+    /// leaf, or an arbitrary leaf) in half.
+    pub fn insert(&mut self, window: WindowElement, area: Rectangle<i32, Logical>, target: Option<&WindowElement>) {
+        self.last = Some(window.clone());
+
+        let Some(root) = self.root.take() else {
+            self.root = Some(Node::Leaf(window));
+            return;
+        };
+
+        let target = target
+            .filter(|t| Self::tree_contains(&root, t))
+            .cloned()
+            .or_else(|| self.last.clone())
+            .unwrap_or_else(|| Self::first_leaf(&root).clone());
+
+        let target_rect = Self::layout_rec_rect(&root, area, &target).unwrap_or(area);
+        let vertical = target_rect.size.w >= target_rect.size.h;
+
+        let new_root = Self::replace_leaf(
+            root,
+            &target,
+            Node::Split {
+                vertical,
+                ratio: 0.5,
+                a: Box::new(Node::Leaf(target.clone())),
+                b: Box::new(Node::Leaf(window)),
+            },
+        );
+        self.root = Some(new_root);
+    }
+
+    fn tree_contains(node: &Node, window: &WindowElement) -> bool {
+        match node {
+            Node::Leaf(w) => w == window,
+            Node::Split { a, b, .. } => Self::tree_contains(a, window) || Self::tree_contains(b, window),
+        }
+    }
+
+    fn first_leaf(node: &Node) -> &WindowElement {
+        match node {
+            Node::Leaf(w) => w,
+            Node::Split { a, .. } => Self::first_leaf(a),
+        }
+    }
+
+    /// Replace the leaf holding `target` with `replacement`. `target` is assumed
+    /// to be present in `node`.
+    fn replace_leaf(node: Node, target: &WindowElement, replacement: Node) -> Node {
+        match node {
+            Node::Leaf(w) => {
+                if &w == target {
+                    replacement
+                } else {
+                    Node::Leaf(w)
+                }
+            }
+            Node::Split { vertical, ratio, a, b } => {
+                if Self::tree_contains(&a, target) {
+                    Node::Split {
+                        vertical,
+                        ratio,
+                        a: Box::new(Self::replace_leaf(*a, target, replacement)),
+                        b,
+                    }
+                } else {
+                    Node::Split {
+                        vertical,
+                        ratio,
+                        a,
+                        b: Box::new(Self::replace_leaf(*b, target, replacement)),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Remove `window` from the tree, collapsing its sibling into its slot.
+    pub fn remove(&mut self, window: &WindowElement) -> bool {
+        if self.last.as_ref() == Some(window) {
+            self.last = None;
+        }
+        let Some(root) = self.root.take() else {
+            return false;
+        };
+        let (new_root, found) = Self::remove_rec(root, window);
+        self.root = new_root;
+        found
+    }
+
+    fn remove_rec(node: Node, target: &WindowElement) -> (Option<Node>, bool) {
+        match node {
+            Node::Leaf(w) => {
+                if &w == target {
+                    (None, true)
+                } else {
+                    (Some(Node::Leaf(w)), false)
+                }
+            }
+            Node::Split { vertical, ratio, a, b } => {
+                let (new_a, found_a) = Self::remove_rec(*a, target);
+                if found_a {
+                    return match new_a {
+                        None => (Some(*b), true),
+                        Some(na) => (Some(Node::Split { vertical, ratio, a: Box::new(na), b }), true),
+                    };
+                }
+                // Not found under `a`; `remove_rec` hands back the subtree unchanged.
+                let a = Box::new(new_a.expect("unchanged subtree is always returned"));
+                let (new_b, found_b) = Self::remove_rec(*b, target);
+                if found_b {
+                    return match new_b {
+                        None => (Some(*a), true),
+                        Some(nb) => (Some(Node::Split { vertical, ratio, a, b: Box::new(nb) }), true),
+                    };
+                }
+                let b = Box::new(new_b.expect("unchanged subtree is always returned"));
+                (Some(Node::Split { vertical, ratio, a, b }), false)
+            }
+        }
+    }
+
+    /// Swap the positions of two tiled windows in the tree.
+    pub fn swap(&mut self, a: &WindowElement, b: &WindowElement) {
+        fn walk(node: &mut Node, a: &WindowElement, b: &WindowElement) {
+            match node {
+                Node::Leaf(w) => {
+                    if w == a {
+                        *w = b.clone();
+                    } else if w == b {
+                        *w = a.clone();
+                    }
+                }
+                Node::Split { a: na, b: nb, .. } => {
+                    walk(na, a, b);
+                    walk(nb, a, b);
+                }
+            }
+        }
+        if let Some(root) = &mut self.root {
+            walk(root, a, b);
+        }
+    }
+
+    /// Grow (positive `delta`) or shrink (negative) the focused window's share
+    /// of the nearest ancestor split matching `vertical`.
+    pub fn adjust_ratio(&mut self, window: &WindowElement, vertical: bool, delta: f32) {
+        fn walk(node: &mut Node, target: &WindowElement, vertical: bool, delta: f32) -> (bool, bool) {
+            match node {
+                Node::Leaf(w) => (&*w == target, false),
+                Node::Split { vertical: v, ratio, a, b } => {
+                    let (in_a, done_a) = walk(a, target, vertical, delta);
+                    if in_a {
+                        if !done_a && *v == vertical {
+                            *ratio = (*ratio + delta).clamp(0.1, 0.9);
+                            return (true, true);
+                        }
+                        return (true, done_a);
+                    }
+                    let (in_b, done_b) = walk(b, target, vertical, delta);
+                    if in_b {
+                        if !done_b && *v == vertical {
+                            *ratio = (*ratio - delta).clamp(0.1, 0.9);
+                            return (true, true);
+                        }
+                        return (true, done_b);
+                    }
+                    (false, false)
+                }
+            }
+        }
+        if let Some(root) = &mut self.root {
+            walk(root, window, vertical, delta);
+        }
+    }
+
+    /// Remove any windows that are no longer alive. Returns `true` if the tree changed.
+    pub fn retain_alive(&mut self) -> bool {
+        let dead: Vec<_> = self.windows().into_iter().filter(|w| !w.alive()).collect();
+        let mut changed = false;
+        for window in dead {
+            changed |= self.remove(&window);
+        }
+        changed
+    }
+
+    /// Compute the on-screen rectangle for every tiled window within `area`.
+    pub fn layout(&self, area: Rectangle<i32, Logical>) -> Vec<(WindowElement, Rectangle<i32, Logical>)> {
+        let mut out = Vec::new();
+        if let Some(root) = &self.root {
+            Self::layout_rec(root, area, &mut out);
+        }
+        out
+    }
+
+    fn layout_rec(node: &Node, area: Rectangle<i32, Logical>, out: &mut Vec<(WindowElement, Rectangle<i32, Logical>)>) {
+        match node {
+            Node::Leaf(w) => out.push((w.clone(), area)),
+            Node::Split { vertical, ratio, a, b } => {
+                let half_gap = GAP / 2;
+                if *vertical {
+                    let wa = ((area.size.w as f32) * ratio) as i32;
+                    let area_a =
+                        Rectangle::new(area.loc, (wa - half_gap, area.size.h).into());
+                    let area_b = Rectangle::new(
+                        Point::from((area.loc.x + wa + half_gap, area.loc.y)),
+                        (area.size.w - wa - half_gap, area.size.h).into(),
+                    );
+                    Self::layout_rec(a, area_a, out);
+                    Self::layout_rec(b, area_b, out);
+                } else {
+                    let ha = ((area.size.h as f32) * ratio) as i32;
+                    let area_a =
+                        Rectangle::new(area.loc, (area.size.w, ha - half_gap).into());
+                    let area_b = Rectangle::new(
+                        Point::from((area.loc.x, area.loc.y + ha + half_gap)),
+                        (area.size.w, area.size.h - ha - half_gap).into(),
+                    );
+                    Self::layout_rec(a, area_a, out);
+                    Self::layout_rec(b, area_b, out);
+                }
+            }
+        }
+    }
+
+    fn layout_rec_rect(
+        node: &Node,
+        area: Rectangle<i32, Logical>,
+        target: &WindowElement,
+    ) -> Option<Rectangle<i32, Logical>> {
+        let mut rects = Vec::new();
+        Self::layout_rec(node, area, &mut rects);
+        rects.into_iter().find(|(w, _)| w == target).map(|(_, r)| r)
+    }
+}
+
+#[derive(Default)]
+pub struct TilingState(pub RefCell<TilingLayout>);
+
+impl TilingState {
+    pub fn get(output: &Output) -> &TilingState {
+        output.user_data().insert_if_missing(TilingState::default);
+        output.user_data().get::<TilingState>().unwrap()
+    }
+}
+
+fn tiling_area(space: &Space<WindowElement>, output: &Output) -> Rectangle<i32, Logical> {
+    let geo = space.output_geometry(output).unwrap_or_default();
+    let map = layer_map_for_output(output);
+    let zone = map.non_exclusive_zone();
+    Rectangle::new(geo.loc + zone.loc, zone.size)
+}
+
+fn find_output_containing<BackendData: Backend>(
+    state: &AnvilState<BackendData>,
+    window: &WindowElement,
+) -> Option<Output> {
+    state
+        .space
+        .outputs()
+        .find(|o| TilingState::get(o).0.borrow().contains(window))
+        .cloned()
+}
+
+fn current_focused_window<BackendData: Backend>(state: &AnvilState<BackendData>) -> Option<WindowElement> {
+    let keyboard = state.seat.get_keyboard()?;
+    match keyboard.current_focus()? {
+        KeyboardFocusTarget::Window(w) => Some(WindowElement(w)),
+        _ => None,
+    }
+}
+
+fn raise_and_focus<BackendData: Backend>(state: &mut AnvilState<BackendData>, window: &WindowElement) {
+    state.space.raise_element(window, true);
+    if let Some(keyboard) = state.seat.get_keyboard() {
+        let serial = SERIAL_COUNTER.next_serial();
+        keyboard.set_focus(state, Some(window.clone().into()), serial);
+    }
+}
+
+/// Re-flow every tiled window on `output` to match its current tree.
+pub fn apply_layout<BackendData: Backend>(state: &mut AnvilState<BackendData>, output: &Output) {
+    let area = tiling_area(&state.space, output);
+    let rects = TilingState::get(output).0.borrow().layout(area);
+    for (window, rect) in rects {
+        #[allow(irrefutable_let_patterns)]
+        if let Some(toplevel) = window.0.toplevel() {
+            let changed = toplevel.with_pending_state(|s| {
+                if s.size != Some(rect.size) {
+                    s.size = Some(rect.size);
+                    true
+                } else {
+                    false
+                }
+            });
+            if changed && toplevel.is_initial_configure_sent() {
+                toplevel.send_pending_configure();
+            }
+        }
+        state.space.map_element(window, rect.loc, false);
+    }
+}
+
+/// Should this newly-created toplevel participate in tiling at all?
+/// Dialogs (windows with a parent) and fixed-size utility windows stay floating.
+pub fn should_tile(window: &WindowElement) -> bool {
+    #[allow(irrefutable_let_patterns)]
+    let Some(toplevel) = window.0.toplevel() else {
+        return false;
+    };
+    if toplevel.parent().is_some() {
+        return false;
+    }
+    let (min, max) = with_states(toplevel.wl_surface(), |states| {
+        let mut cached = states.cached_state.get::<SurfaceCachedState>();
+        let state = cached.current();
+        (state.min_size, state.max_size)
+    });
+    let fixed_size = min.w > 0 && min.h > 0 && min == max;
+    !fixed_size
+}
+
+/// Insert a newly mapped window into the tiling tree of the output it belongs on.
+pub fn tile_new_window<BackendData: Backend>(
+    state: &mut AnvilState<BackendData>,
+    window: &WindowElement,
+    pointer_location: Point<f64, Logical>,
+) {
+    let Some(output) = state
+        .space
+        .output_under(pointer_location)
+        .next()
+        .or_else(|| state.space.outputs().next())
+        .cloned()
+    else {
+        return;
+    };
+
+    let target = current_focused_window(state).filter(|w| TilingState::get(&output).0.borrow().contains(w));
+
+    let area = tiling_area(&state.space, &output);
+    TilingState::get(&output)
+        .0
+        .borrow_mut()
+        .insert(window.clone(), area, target.as_ref());
+
+    apply_layout(state, &output);
+    raise_and_focus(state, window);
+}
+
+/// Remove `window` from whichever output's tiling tree contains it, and
+/// re-flow the remaining windows. Returns `true` if it was tiled.
+pub fn untile_window<BackendData: Backend>(state: &mut AnvilState<BackendData>, window: &WindowElement) -> bool {
+    let Some(output) = find_output_containing(state, window) else {
+        return false;
+    };
+    let removed = TilingState::get(&output).0.borrow_mut().remove(window);
+    if removed {
+        apply_layout(state, &output);
+    }
+    removed
+}
+
+/// Toggle whether `window` participates in tiling.
+pub fn toggle_floating<BackendData: Backend>(state: &mut AnvilState<BackendData>, window: &WindowElement) {
+    if untile_window(state, window) {
+        return;
+    }
+    tile_new_window(state, window, state.pointer.current_location());
+}
+
+/// Re-flow every output's tiling tree, e.g. after output geometry changed
+/// (scale, rotation, added/removed monitors).
+pub fn retile_all_outputs<BackendData: Backend>(state: &mut AnvilState<BackendData>) {
+    let outputs: Vec<Output> = state.space.outputs().cloned().collect();
+    for output in outputs {
+        apply_layout(state, &output);
+    }
+}
+
+/// Drop dead windows from every output's tiling tree and re-flow the ones that changed.
+pub fn cleanup_dead<BackendData: Backend>(state: &mut AnvilState<BackendData>) {
+    let outputs: Vec<Output> = state.space.outputs().cloned().collect();
+    for output in outputs {
+        let changed = TilingState::get(&output).0.borrow_mut().retain_alive();
+        if changed {
+            apply_layout(state, &output);
+        }
+    }
+}
+
+/// Move keyboard focus to the tiled window neighboring the currently focused
+/// one in `dir`. No-op if the focused window isn't tiled.
+pub fn focus_direction<BackendData: Backend>(state: &mut AnvilState<BackendData>, dir: Direction) {
+    let Some(focused) = current_focused_window(state) else {
+        return;
+    };
+    let Some(output) = find_output_containing(state, &focused) else {
+        return;
+    };
+    let area = tiling_area(&state.space, &output);
+    let rects = TilingState::get(&output).0.borrow().layout(area);
+    if let Some(target) = neighbor(&rects, &focused, dir) {
+        raise_and_focus(state, &target);
+    }
+}
+
+/// Swap the currently focused tiled window with its neighbor in `dir`.
+pub fn swap_direction<BackendData: Backend>(state: &mut AnvilState<BackendData>, dir: Direction) {
+    let Some(focused) = current_focused_window(state) else {
+        return;
+    };
+    let Some(output) = find_output_containing(state, &focused) else {
+        return;
+    };
+    let area = tiling_area(&state.space, &output);
+    let rects = TilingState::get(&output).0.borrow().layout(area);
+    let Some(target) = neighbor(&rects, &focused, dir) else {
+        return;
+    };
+    TilingState::get(&output).0.borrow_mut().swap(&focused, &target);
+    apply_layout(state, &output);
+    raise_and_focus(state, &focused);
+}
+
+/// Grow the currently focused tiled window towards `dir` by shrinking its neighbor.
+pub fn resize_tiled<BackendData: Backend>(state: &mut AnvilState<BackendData>, dir: Direction) {
+    let Some(focused) = current_focused_window(state) else {
+        return;
+    };
+    let Some(output) = find_output_containing(state, &focused) else {
+        return;
+    };
+    let vertical = matches!(dir, Direction::Left | Direction::Right);
+    let grow = matches!(dir, Direction::Right | Direction::Down);
+    let delta = if grow { RESIZE_STEP } else { -RESIZE_STEP };
+    TilingState::get(&output)
+        .0
+        .borrow_mut()
+        .adjust_ratio(&focused, vertical, delta);
+    apply_layout(state, &output);
+}
+
+fn leaf_center(rect: &Rectangle<i32, Logical>) -> (i32, i32) {
+    (rect.loc.x + rect.size.w / 2, rect.loc.y + rect.size.h / 2)
+}
+
+fn neighbor(
+    rects: &[(WindowElement, Rectangle<i32, Logical>)],
+    focused: &WindowElement,
+    dir: Direction,
+) -> Option<WindowElement> {
+    let focused_rect = rects.iter().find(|(w, _)| w == focused)?.1;
+    let (fx, fy) = leaf_center(&focused_rect);
+
+    let mut best: Option<(i64, WindowElement)> = None;
+    for (w, r) in rects {
+        if w == focused {
+            continue;
+        }
+        let (cx, cy) = leaf_center(r);
+        let matches_dir = match dir {
+            Direction::Left => cx < fx,
+            Direction::Right => cx > fx,
+            Direction::Up => cy < fy,
+            Direction::Down => cy > fy,
+        };
+        if !matches_dir {
+            continue;
+        }
+        let (primary, secondary) = match dir {
+            Direction::Left | Direction::Right => ((cx - fx).abs(), (cy - fy).abs()),
+            Direction::Up | Direction::Down => ((cy - fy).abs(), (cx - fx).abs()),
+        };
+        let score = primary as i64 * 4 + secondary as i64;
+        if best.as_ref().is_none_or(|(best_score, _)| score < *best_score) {
+            best = Some((score, w.clone()));
+        }
+    }
+    best.map(|(_, w)| w)
+}

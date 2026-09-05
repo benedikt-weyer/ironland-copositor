@@ -48,6 +48,7 @@ use crate::{
 mod element;
 mod grabs;
 pub(crate) mod ssd;
+pub mod tiling;
 #[cfg(feature = "xwayland")]
 mod x11;
 mod xdg;
