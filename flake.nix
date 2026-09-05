@@ -107,7 +107,26 @@
             # both greetd's config parser and TOML's own quoting corner
             # cases.
             environment.etc."ironland-launch.sh".source = pkgs.writeShellScript "ironland-launch" ''
-              ironland-copositor --tty-udev
+              ironland-copositor --tty-udev &
+              compositor_pid=$!
+
+              # The compositor doesn't run an autostart list itself, so bring
+              # up the caelestia (quickshell) shell from here once its socket
+              # exists. Polling the runtime dir for it is simpler than
+              # scraping stdout for the "Listening on wayland socket" log line.
+              runtime_dir="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+              socket=""
+              for _ in $(seq 1 100); do
+                socket=$(find "$runtime_dir" -maxdepth 1 -name 'wayland-*' ! -name '*.lock' 2>/dev/null | head -n1)
+                [ -n "$socket" ] && break
+                sleep 0.1
+              done
+
+              if [ -n "$socket" ]; then
+                WAYLAND_DISPLAY=$(basename "$socket") ${pkgs.caelestia-shell}/bin/caelestia-shell &
+              fi
+
+              wait "$compositor_pid"
             '';
 
             services.greetd = {
@@ -130,6 +149,8 @@
               pkgs.alacritty
               pkgs.firefox
               pkgs.blueman
+              pkgs.quickshell
+              pkgs.caelestia-shell
             ];
 
             # Still needed at runtime: some of these libraries (GL/EGL/Vulkan
