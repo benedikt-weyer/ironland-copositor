@@ -44,6 +44,17 @@
         buildInputs = perSystemBuildInputs pkgs;
       in
       {
+        packages.default = pkgs.rustPlatform.buildRustPackage {
+          pname = "ironland-copositor";
+          version = "0.1.0";
+          src = ./.;
+          cargoLock = {
+            lockFile = ./Cargo.lock;
+            allowBuiltinFetchGit = true;
+          };
+          inherit nativeBuildInputs buildInputs;
+        };
+
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             cargo
@@ -84,8 +95,7 @@
             # in a loop.
             environment.loginShellInit = ''
               if [ "$(tty)" = "/dev/tty1" ] && [ "$USER" = "dev" ]; then
-                cd ~/project
-                cargo run -- --tty-udev
+                ironland-copositor --tty-udev
               fi
             '';
 
@@ -93,43 +103,30 @@
             # kind, so the udev backend has an uncontested seat and DRM master.
             services.xserver.enable = false;
 
-            environment.systemPackages = with pkgs; [
-              cargo
-              rustc
-              stdenv.cc
-              pkg-config
-            ] ++ perSystemBuildInputs pkgs;
+            # The compositor is built on the host (see `packages.default`
+            # above) and only the resulting binary closure lands in the VM —
+            # no cargo/rustc/cc/pkg-config needed here at all.
+            environment.systemPackages = [ self.packages.x86_64-linux.default ];
 
+            # Still needed at runtime: some of these libraries (GL/EGL/Vulkan
+            # loaders, mesa drivers) are dlopen'd rather than linked, so no
+            # RPATH baked into the binary covers them.
             environment.variables.LD_LIBRARY_PATH =
               pkgs.lib.makeLibraryPath (perSystemBuildInputs pkgs);
-            # `environment.systemPackages` doesn't wire up PKG_CONFIG_PATH the
-            # way `mkShell`'s buildInputs do, so pkg-config can't find any of
-            # these .pc files (libudev, wayland, libxkbcommon, ...) otherwise.
-            environment.variables.PKG_CONFIG_PATH =
-              pkgs.lib.makeSearchPathOutput "dev" "lib/pkgconfig" (perSystemBuildInputs pkgs);
 
             virtualisation.vmVariant = {
               virtualisation.memorySize = 4096;
               virtualisation.cores = 4;
               virtualisation.graphics = true;
               virtualisation.qemu.options = [ "-vga virtio" ];
-              # Mount the repo, and the host's cargo cache (registry + the
-              # smithay git checkout), read-write, so `cargo build` inside the
-              # VM reuses what's already downloaded on the host instead of
-              # needing its own network access.
-              virtualisation.sharedDirectories = {
-                project = {
-                  # Set by scripts/run-vm; falls back to this repo's checkout
-                  # location for a manual `nix build --impure`.
-                  source = let v = builtins.getEnv "IRONLAND_VM_PROJECT_DIR"; in
-                    if v != "" then v else "/mnt/local-storage/git/low-level/ironland-copositor";
-                  target = "/home/dev/project";
-                };
-                cargo-home = {
-                  source = let v = builtins.getEnv "IRONLAND_VM_CARGO_HOME"; in
-                    if v != "" then v else "/home/benedikt/.cargo";
-                  target = "/home/dev/.cargo";
-                };
+              # Handy for looking at source/config from inside the VM; not
+              # needed to run the compositor itself, which is preinstalled.
+              virtualisation.sharedDirectories.project = {
+                # Set by scripts/run-vm; falls back to this repo's checkout
+                # location for a manual `nix build --impure`.
+                source = let v = builtins.getEnv "IRONLAND_VM_PROJECT_DIR"; in
+                  if v != "" then v else "/mnt/local-storage/git/low-level/ironland-copositor";
+                target = "/home/dev/project";
               };
             };
           })
