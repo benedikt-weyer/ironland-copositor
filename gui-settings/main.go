@@ -26,6 +26,7 @@ func main() {
 
 	keyboardTab := buildKeyboardTab(&cfg)
 	shortcutsTab := buildShortcutsTab(&cfg)
+	outputsTab := buildOutputsTab(&cfg, w)
 
 	status := widget.NewLabel(statusText(loadedFrom))
 	status.Wrapping = fyne.TextWrapWord
@@ -43,6 +44,7 @@ func main() {
 	tabs := container.NewAppTabs(
 		container.NewTabItem("Keyboard", keyboardTab),
 		container.NewTabItem("Shortcuts", shortcutsTab),
+		container.NewTabItem("Monitors", outputsTab),
 	)
 
 	content := container.NewBorder(nil, container.NewVBox(status, saveButton), nil, nil, tabs)

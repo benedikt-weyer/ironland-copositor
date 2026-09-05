@@ -15,7 +15,10 @@
 use std::{collections::HashMap, env, fs, path::PathBuf};
 
 use serde::Deserialize;
-use smithay::input::keyboard::{Keysym, ModifiersState, XkbConfig, xkb};
+use smithay::{
+    input::keyboard::{Keysym, ModifiersState, XkbConfig, xkb},
+    utils::{Logical, Point, Rectangle, Size},
+};
 use tracing::warn;
 
 /// Keyboard layout settings, passed straight through to xkbcommon.
@@ -66,6 +69,84 @@ impl KeyModifiers {
     }
 }
 
+/// Where to place an output relative to another, already-placed one, or at
+/// an explicit logical position. Kept separate from [`OutputSettings::mirror_of`]:
+/// mirroring takes priority over `position` when both are set for the same
+/// output.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum OutputPosition {
+    RightOf { right_of: String },
+    LeftOf { left_of: String },
+    Above { above: String },
+    Below { below: String },
+    Absolute { x: i32, y: i32 },
+}
+
+/// Per-output settings, keyed by connector name (e.g. `"eDP-1"`,
+/// `"HDMI-A-1"`) in the `[outputs.*]` config table.
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct OutputSettings {
+    /// Marks this the primary monitor. At most one output should set this;
+    /// if several do, which one wins is unspecified.
+    pub primary: bool,
+    /// Name of another output to duplicate ("mirror"/"clone" this one onto),
+    /// by placing this output at that output's position. Takes priority over
+    /// `position`.
+    pub mirror_of: Option<String>,
+    /// Where to place this output when it isn't mirroring another one.
+    /// Defaults to auto-placement (stacked to the right of every other
+    /// placed output), matching pre-existing behavior.
+    pub position: Option<OutputPosition>,
+}
+
+/// Resolves where a newly-connecting output named `name`, with logical size
+/// `size`, should be placed, given its [`OutputSettings`] and the outputs
+/// already placed in the space (`name -> current geometry`).
+///
+/// Falls back to auto-placement (and logs a warning) if a referenced output
+/// (`mirror_of`/`right_of`/etc.) hasn't connected yet.
+pub fn resolve_output_position(
+    settings: &OutputSettings,
+    name: &str,
+    size: Size<i32, Logical>,
+    placed: &[(String, Rectangle<i32, Logical>)],
+) -> Point<i32, Logical> {
+    let find = |target: &str| placed.iter().find(|(n, _)| n == target).map(|(_, rect)| *rect);
+
+    if let Some(target) = settings.mirror_of.as_deref() {
+        match find(target) {
+            Some(rect) => return rect.loc,
+            None => warn!(output = name, mirror_of = target, "Mirror target not connected yet, using auto placement"),
+        }
+    }
+
+    match &settings.position {
+        Some(OutputPosition::Absolute { x, y }) => return (*x, *y).into(),
+        Some(OutputPosition::RightOf { right_of }) => match find(right_of) {
+            Some(rect) => return (rect.loc.x + rect.size.w, rect.loc.y).into(),
+            None => warn!(output = name, right_of, "Reference output not connected yet, using auto placement"),
+        },
+        Some(OutputPosition::LeftOf { left_of }) => match find(left_of) {
+            Some(rect) => return (rect.loc.x - size.w, rect.loc.y).into(),
+            None => warn!(output = name, left_of, "Reference output not connected yet, using auto placement"),
+        },
+        Some(OutputPosition::Above { above }) => match find(above) {
+            Some(rect) => return (rect.loc.x, rect.loc.y - size.h).into(),
+            None => warn!(output = name, above, "Reference output not connected yet, using auto placement"),
+        },
+        Some(OutputPosition::Below { below }) => match find(below) {
+            Some(rect) => return (rect.loc.x, rect.loc.y + rect.size.h).into(),
+            None => warn!(output = name, below, "Reference output not connected yet, using auto placement"),
+        },
+        None => {}
+    }
+
+    let x = placed.iter().map(|(_, rect)| rect.loc.x + rect.size.w).max().unwrap_or(0);
+    (x, 0).into()
+}
+
 /// A single parsed keybinding: the modifiers/key it fires on, and the name
 /// of the action to run (looked up against the compositor's own action
 /// table, since the set of possible actions is compositor-specific and this
@@ -83,6 +164,7 @@ struct RawConfig {
     keyboard: KeyboardSettings,
     terminal: Option<String>,
     shortcuts: HashMap<String, Vec<String>>,
+    outputs: HashMap<String, OutputSettings>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +175,10 @@ pub struct Config {
     /// Always fully populated: entries not overridden by the config file
     /// keep their built-in default.
     pub shortcuts: HashMap<String, Vec<String>>,
+    /// connector name (e.g. `"eDP-1"`) -> settings for that output. Outputs
+    /// not present here use [`OutputSettings::default`] (auto-placed,
+    /// extended, not primary).
+    pub outputs: HashMap<String, OutputSettings>,
 }
 
 impl Default for Config {
@@ -101,6 +187,7 @@ impl Default for Config {
             keyboard: KeyboardSettings::default(),
             terminal: default_terminal(),
             shortcuts: default_shortcuts(),
+            outputs: HashMap::new(),
         }
     }
 }
@@ -222,10 +309,26 @@ impl Config {
                 keyboard: raw.keyboard,
                 terminal: raw.terminal.unwrap_or_else(default_terminal),
                 shortcuts,
+                outputs: raw.outputs,
             };
         }
 
         Config::default()
+    }
+
+    /// Settings for the output named `name`, or the all-default settings
+    /// (auto-placed, extended, not primary) if it isn't configured.
+    pub fn output_settings(&self, name: &str) -> OutputSettings {
+        self.outputs.get(name).cloned().unwrap_or_default()
+    }
+
+    /// Name of the output marked `primary = true`, if any. If more than one
+    /// is marked primary, which one wins is unspecified.
+    pub fn primary_output_name(&self) -> Option<&str> {
+        self.outputs
+            .iter()
+            .find(|(_, settings)| settings.primary)
+            .map(|(name, _)| name.as_str())
     }
 
     /// Parses every configured binding into `(modifiers, keysym, action
@@ -355,6 +458,7 @@ mod tests {
             keyboard: KeyboardSettings::default(),
             terminal: None,
             shortcuts,
+            outputs: HashMap::new(),
         };
 
         let mut merged = default_shortcuts();
@@ -362,5 +466,92 @@ mod tests {
 
         assert_eq!(merged["quit"], vec!["ctrl+alt+q"]);
         assert_eq!(merged["toggle_launcher"], vec!["ctrl+space"]);
+    }
+
+    fn size(w: i32, h: i32) -> Size<i32, Logical> {
+        (w, h).into()
+    }
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn parses_relative_and_absolute_positions() {
+        let toml = r#"
+            [outputs."HDMI-A-1"]
+            position = { right_of = "eDP-1" }
+
+            [outputs."DP-1"]
+            position = { x = 100, y = 200 }
+
+            [outputs."eDP-1"]
+            primary = true
+        "#;
+        let raw: RawConfig = toml::from_str(toml).unwrap();
+        assert_eq!(
+            raw.outputs["HDMI-A-1"].position,
+            Some(OutputPosition::RightOf { right_of: "eDP-1".to_string() })
+        );
+        assert_eq!(raw.outputs["DP-1"].position, Some(OutputPosition::Absolute { x: 100, y: 200 }));
+        assert!(raw.outputs["eDP-1"].primary);
+    }
+
+    #[test]
+    fn auto_placement_stacks_to_the_right() {
+        let settings = OutputSettings::default();
+        let placed = [("eDP-1".to_string(), rect(0, 0, 1920, 1080))];
+        let pos = resolve_output_position(&settings, "HDMI-A-1", size(1920, 1080), &placed);
+        assert_eq!(pos, (1920, 0).into());
+    }
+
+    #[test]
+    fn relative_positions_place_next_to_target() {
+        let placed = [("eDP-1".to_string(), rect(0, 0, 1920, 1080))];
+
+        let right = OutputSettings {
+            position: Some(OutputPosition::RightOf { right_of: "eDP-1".to_string() }),
+            ..Default::default()
+        };
+        assert_eq!(resolve_output_position(&right, "b", size(800, 600), &placed), (1920, 0).into());
+
+        let left = OutputSettings {
+            position: Some(OutputPosition::LeftOf { left_of: "eDP-1".to_string() }),
+            ..Default::default()
+        };
+        assert_eq!(resolve_output_position(&left, "b", size(800, 600), &placed), (-800, 0).into());
+
+        let above = OutputSettings {
+            position: Some(OutputPosition::Above { above: "eDP-1".to_string() }),
+            ..Default::default()
+        };
+        assert_eq!(resolve_output_position(&above, "b", size(800, 600), &placed), (0, -600).into());
+
+        let below = OutputSettings {
+            position: Some(OutputPosition::Below { below: "eDP-1".to_string() }),
+            ..Default::default()
+        };
+        assert_eq!(resolve_output_position(&below, "b", size(800, 600), &placed), (0, 1080).into());
+    }
+
+    #[test]
+    fn mirror_of_takes_priority_over_position() {
+        let placed = [("eDP-1".to_string(), rect(0, 0, 1920, 1080))];
+        let settings = OutputSettings {
+            mirror_of: Some("eDP-1".to_string()),
+            position: Some(OutputPosition::RightOf { right_of: "eDP-1".to_string() }),
+            ..Default::default()
+        };
+        assert_eq!(resolve_output_position(&settings, "HDMI-A-1", size(1920, 1080), &placed), (0, 0).into());
+    }
+
+    #[test]
+    fn missing_reference_output_falls_back_to_auto_placement() {
+        let placed = [("eDP-1".to_string(), rect(0, 0, 1920, 1080))];
+        let settings = OutputSettings {
+            position: Some(OutputPosition::RightOf { right_of: "not-connected".to_string() }),
+            ..Default::default()
+        };
+        assert_eq!(resolve_output_position(&settings, "b", size(800, 600), &placed), (1920, 0).into());
     }
 }

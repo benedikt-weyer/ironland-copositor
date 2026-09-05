@@ -21,9 +21,33 @@ type KeyboardSettings struct {
 
 // Config mirrors `config::Config` / `config::RawConfig` in the compositor.
 type Config struct {
-	Keyboard  KeyboardSettings    `toml:"keyboard"`
-	Terminal  string              `toml:"terminal"`
-	Shortcuts map[string][]string `toml:"shortcuts"`
+	Keyboard  KeyboardSettings          `toml:"keyboard"`
+	Terminal  string                    `toml:"terminal"`
+	Shortcuts map[string][]string       `toml:"shortcuts"`
+	Outputs   map[string]OutputSettings `toml:"outputs"`
+}
+
+// OutputPosition mirrors `config::OutputPosition` in the compositor: exactly
+// one of RightOf/LeftOf/Above/Below (each another output's connector name)
+// or X/Y (an absolute logical position) should be set. It's kept flat
+// rather than as a Go-level tagged union because that's how it round-trips
+// through TOML into Rust's `#[serde(untagged)]` enum: only the keys present
+// in the table matter, and `omitempty` keeps the others out of the file.
+type OutputPosition struct {
+	RightOf string `toml:"right_of,omitempty"`
+	LeftOf  string `toml:"left_of,omitempty"`
+	Above   string `toml:"above,omitempty"`
+	Below   string `toml:"below,omitempty"`
+	X       *int   `toml:"x,omitempty"`
+	Y       *int   `toml:"y,omitempty"`
+}
+
+// OutputSettings mirrors `config::OutputSettings` in the compositor, keyed
+// by connector name (e.g. "eDP-1", "HDMI-A-1") in Config.Outputs.
+type OutputSettings struct {
+	Primary  bool            `toml:"primary,omitempty"`
+	MirrorOf string          `toml:"mirror_of,omitempty"`
+	Position *OutputPosition `toml:"position,omitempty"`
 }
 
 // knownActions lists every action the compositor recognizes in
@@ -116,6 +140,7 @@ func defaultConfig() Config {
 	return Config{
 		Terminal:  "weston-terminal",
 		Shortcuts: defaultShortcuts(),
+		Outputs:   map[string]OutputSettings{},
 	}
 }
 
@@ -176,6 +201,9 @@ func loadConfig() (Config, string) {
 		cfg.Keyboard = raw.Keyboard
 		for action, keys := range raw.Shortcuts {
 			cfg.Shortcuts[action] = keys
+		}
+		if raw.Outputs != nil {
+			cfg.Outputs = raw.Outputs
 		}
 		return cfg, path
 	}

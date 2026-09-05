@@ -15,8 +15,15 @@ in
       compositor's `src/config.rs` for the full schema: keyboard layout
       under `keyboard` (passed straight through to xkbcommon), the
       terminal launched by the `run_terminal` shortcut under `terminal`,
-      and key bindings under `shortcuts` — only the actions you set there
-      override the built-in defaults, so a partial table is fine.
+      key bindings under `shortcuts` — only the actions you set there
+      override the built-in defaults, so a partial table is fine — and
+      per-monitor settings under `outputs.<connector-name>` (e.g.
+      `outputs."eDP-1"`, `outputs."HDMI-A-1"`): `primary` marks the main
+      monitor, `mirror_of` duplicates another output's position onto this
+      one, and `position` places this output relative to another
+      (`right_of`/`left_of`/`above`/`below`, each an output name) or at an
+      absolute `{ x, y }`. An output not listed here is auto-placed to the
+      right of the others, matching the compositor's previous behavior.
     '';
     example = lib.literalExpression ''
       {
@@ -29,6 +36,11 @@ in
           # Overrides just this one binding; every other shortcut keeps
           # its built-in default.
           toggle_launcher = [ "ctrl+space" ];
+        };
+        outputs = {
+          "eDP-1".primary = true;
+          "HDMI-A-1".position.right_of = "eDP-1";
+          # "DP-1".mirror_of = "eDP-1";
         };
       }
     '';

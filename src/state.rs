@@ -192,6 +192,11 @@ pub struct AnvilState<BackendData: Backend + 'static> {
     /// Resolved keybinding table, built once at startup from `config::Config`
     /// (see `input_handler::compile_keybindings`).
     pub(crate) keybindings: Vec<(crate::config::KeyModifiers, Keysym, crate::input_handler::KeyAction)>,
+
+    /// User-facing settings loaded at startup (see [`crate::config::Config`]),
+    /// kept around so backends can consult output placement/mirroring/primary
+    /// settings as monitors connect.
+    pub config: crate::config::Config,
 }
 
 #[derive(Debug)]
@@ -809,6 +814,7 @@ impl<BackendData: Backend + 'static> AnvilState<BackendData> {
             show_window_preview: false,
             launcher: crate::drawing::LauncherState::default(),
             keybindings,
+            config,
         }
     }
 

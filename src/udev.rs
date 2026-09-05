@@ -86,7 +86,7 @@ use smithay::{
         },
         wayland_server::{Display, DisplayHandle, backend::GlobalId, protocol::wl_surface},
     },
-    utils::{DeviceFd, IsAlive, Logical, Monotonic, Point, Scale, Time, Transform},
+    utils::{DeviceFd, IsAlive, Logical, Monotonic, Point, Rectangle, Scale, Size, Time, Transform},
     wayland::{
         compositor,
         dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
@@ -983,11 +983,14 @@ impl AnvilState<UdevData> {
             );
             let global = output.create_global::<AnvilState<UdevData>>(&self.display_handle);
 
-            let x = self
+            let output_settings = self.config.output_settings(&output.name());
+            let placed: Vec<(String, Rectangle<i32, Logical>)> = self
                 .space
                 .outputs()
-                .fold(0, |acc, o| acc + self.space.output_geometry(o).unwrap().size.w);
-            let position = (x, 0).into();
+                .map(|o| (o.name(), self.space.output_geometry(o).unwrap()))
+                .collect();
+            let logical_size: Size<i32, Logical> = (drm_mode.size().0 as i32, drm_mode.size().1 as i32).into();
+            let position = crate::config::resolve_output_position(&output_settings, &output.name(), logical_size, &placed);
 
             output.set_preferred(wl_mode);
             output.change_current_state(Some(wl_mode), None, None, Some(position));
@@ -1080,10 +1083,50 @@ impl AnvilState<UdevData> {
 
             device.surfaces.insert(crtc, surface);
 
+            self.reorder_primary_output();
+
             // kick-off rendering
             self.handle.insert_idle(move |state| {
                 state.render_surface(node, crtc, state.clock.now());
             });
+        }
+    }
+
+    /// Ensures the output marked `primary = true` in the config (if any and
+    /// if connected) is the first one returned by `space.outputs()`, which
+    /// several call sites use as their "no output under pointer" fallback.
+    /// Positions are preserved; only iteration order changes.
+    fn reorder_primary_output(&mut self) {
+        let Some(primary_name) = self.config.primary_output_name().map(str::to_string) else {
+            return;
+        };
+
+        if self.space.outputs().next().map(|o| o.name()) == Some(primary_name.clone()) {
+            return;
+        }
+
+        let outputs_with_locations: Vec<(Output, Point<i32, Logical>)> = self
+            .space
+            .outputs()
+            .map(|o| (o.clone(), self.space.output_geometry(o).unwrap().loc))
+            .collect();
+
+        if !outputs_with_locations.iter().any(|(o, _)| o.name() == primary_name) {
+            return;
+        }
+
+        for (output, _) in &outputs_with_locations {
+            self.space.unmap_output(output);
+        }
+        for (output, location) in &outputs_with_locations {
+            if output.name() == primary_name {
+                self.space.map_output(output, *location);
+            }
+        }
+        for (output, location) in &outputs_with_locations {
+            if output.name() != primary_name {
+                self.space.map_output(output, *location);
+            }
         }
     }
 
