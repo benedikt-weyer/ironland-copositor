@@ -88,6 +88,13 @@
           vendorHash = "sha256-IhRYaTLleaHKfqmicA8rYOdiEW41J7CxLIWKld4Ez0Q=";
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = guiSettingsBuildInputs;
+          # The compositor has no XWayland, so Fyne's default glfw backend
+          # (X11-only unless told otherwise) can't create a window at all -
+          # it fails with "x11: DISPLAY is missing" even when run from a
+          # terminal inside the Wayland session, since it never looks at
+          # WAYLAND_DISPLAY. This tag switches go-gl/glfw to its native
+          # Wayland backend instead.
+          tags = [ "wayland" ];
         };
 
         devShells.default = pkgs.mkShell {
@@ -106,6 +113,11 @@
         devShells.settings-gui = pkgs.mkShell {
           packages = [ pkgs.go pkgs.gopls pkgs.pkg-config ] ++ guiSettingsBuildInputs;
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath guiSettingsBuildInputs;
+          # See the `tags` comment on packages.settings-gui: the compositor
+          # has no XWayland, so this always needs glfw's native-Wayland
+          # backend. GOFLAGS applies the tag to `go build`/`go run`/`go
+          # test` here without having to remember `-tags wayland` each time.
+          GOFLAGS = "-tags=wayland";
         };
       })) // {
       nixosModules.default = import ./nix/module.nix;
