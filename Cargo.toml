@@ -2,5 +2,53 @@
 name = "ironland-copositor"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+
+[[bin]]
+name = "ironland-copositor"
+path = "src/main.rs"
 
 [dependencies]
+bitflags = "2.2.1"
+rand = "0.8"
+tracing = { version = "0.1.37", features = ["max_level_trace", "release_max_level_debug"] }
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+thiserror = "1"
+xcursor = "0.3.3"
+xkbcommon = "0.8.0"
+profiling = "1.0"
+
+[dependencies.smithay]
+git = "https://github.com/Smithay/smithay.git"
+rev = "28c8e0fad905f3e7d01c2446fb60d26659071684"
+default-features = false
+features = [
+  "desktop",
+  "wayland_frontend",
+  "use_system_lib",
+  "backend_egl",
+  "backend_winit",
+  "backend_libinput",
+  "backend_udev",
+  "backend_drm",
+  "backend_gbm",
+  "backend_vulkan",
+  "backend_session_libseat",
+  "renderer_gl",
+  "renderer_pixman",
+  "renderer_multi",
+]
+
+[dependencies.smithay-drm-extras]
+git = "https://github.com/Smithay/smithay.git"
+rev = "28c8e0fad905f3e7d01c2446fb60d26659071684"
+
+[features]
+default = ["egl", "winit", "udev"]
+egl = []
+winit = []
+udev = []
+debug = []
+x11 = []
+xwayland = []
+libei = []
