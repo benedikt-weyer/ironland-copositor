@@ -94,6 +94,14 @@
             };
             security.sudo.wheelNeedsPassword = false;
 
+            # caelestia-shell's power menu asks logind for PowerOff/Reboot over
+            # D-Bus (org.freedesktop.login1.Manager); without polkit running
+            # to authorize that action logind just refuses the call, so the
+            # buttons silently do nothing. Polkit's own default rules already
+            # grant power-off/reboot/suspend to the active local session, so
+            # enabling it is enough — no extra rule needed.
+            security.polkit.enable = true;
+
             # Populates /run/opengl-driver, which is where Mesa's GBM backend
             # (dri_gbm.so) looks for its driver by NixOS convention. Without
             # this the udev backend fails at GBM device creation.
