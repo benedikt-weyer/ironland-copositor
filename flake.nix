@@ -125,7 +125,12 @@
             # The compositor is built on the host (see `packages.default`
             # above) and only the resulting binary closure lands in the VM —
             # no cargo/rustc/cc/pkg-config needed here at all.
-            environment.systemPackages = [ self.packages.x86_64-linux.default ];
+            environment.systemPackages = [
+              self.packages.x86_64-linux.default
+              pkgs.alacritty
+              pkgs.firefox
+              pkgs.blueman
+            ];
 
             # Still needed at runtime: some of these libraries (GL/EGL/Vulkan
             # loaders, mesa drivers) are dlopen'd rather than linked, so no
