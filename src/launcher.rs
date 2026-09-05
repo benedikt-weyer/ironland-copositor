@@ -159,8 +159,11 @@ fn parse_exec(exec: &str, name: &str) -> Option<(String, Vec<String>)> {
 }
 
 /// Spawns the given desktop entry, respecting `Terminal=true` by wrapping the
-/// command in the user's terminal emulator.
-pub fn launch(entry: &DesktopEntry) -> std::io::Result<Child> {
+/// command in the user's terminal emulator. `envs` should set `WAYLAND_DISPLAY`
+/// (and `DISPLAY`, for XWayland clients) to the compositor's own sockets, so
+/// the launched app connects to this compositor instead of whatever session
+/// it was started from.
+pub fn launch(entry: &DesktopEntry, envs: impl IntoIterator<Item = (&'static str, String)>) -> std::io::Result<Child> {
     let (program, args) = parse_exec(&entry.exec, &entry.name)
         .ok_or_else(|| std::io::Error::other(format!("empty Exec in {}", entry.id)))?;
 
@@ -168,14 +171,19 @@ pub fn launch(entry: &DesktopEntry) -> std::io::Result<Child> {
 
     if entry.terminal {
         let terminal = env::var("TERMINAL").unwrap_or_else(|_| "weston-terminal".into());
-        Command::new(terminal).arg("-e").arg(&program).args(&args).spawn()
+        Command::new(terminal)
+            .arg("-e")
+            .arg(&program)
+            .args(&args)
+            .envs(envs)
+            .spawn()
     } else {
-        Command::new(&program).args(&args).spawn()
+        Command::new(&program).args(&args).envs(envs).spawn()
     }
 }
 
-pub fn launch_and_log(entry: &DesktopEntry) {
-    if let Err(e) = launch(entry) {
+pub fn launch_and_log(entry: &DesktopEntry, envs: impl IntoIterator<Item = (&'static str, String)>) {
+    if let Err(e) = launch(entry, envs) {
         error!(id = entry.id, err = %e, "Failed to launch application");
     }
 }

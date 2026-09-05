@@ -62,6 +62,22 @@ use smithay::{
 };
 
 impl<BackendData: Backend> AnvilState<BackendData> {
+    /// Environment variables that point a spawned process at this compositor's
+    /// own sockets, so it connects here instead of whatever session the
+    /// compositor itself was started from.
+    fn compositor_envs(&self) -> impl Iterator<Item = (&'static str, String)> {
+        self.socket_name
+            .clone()
+            .map(|v| ("WAYLAND_DISPLAY", v))
+            .into_iter()
+            .chain(
+                #[cfg(feature = "xwayland")]
+                self.xdisplay.map(|v| ("DISPLAY", format!(":{v}"))),
+                #[cfg(not(feature = "xwayland"))]
+                None,
+            )
+    }
+
     // Allow in this method because of existing usage
     #[allow(clippy::uninlined_format_args)]
     fn process_common_key_action(&mut self, action: KeyAction) {
@@ -76,21 +92,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
             KeyAction::Run(cmd) => {
                 info!(cmd, "Starting program");
 
-                if let Err(e) = Command::new(&cmd)
-                    .envs(
-                        self.socket_name
-                            .clone()
-                            .map(|v| ("WAYLAND_DISPLAY", v))
-                            .into_iter()
-                            .chain(
-                                #[cfg(feature = "xwayland")]
-                                self.xdisplay.map(|v| ("DISPLAY", format!(":{v}"))),
-                                #[cfg(not(feature = "xwayland"))]
-                                None,
-                            ),
-                    )
-                    .spawn()
-                {
+                if let Err(e) = Command::new(&cmd).envs(self.compositor_envs()).spawn() {
                     error!(cmd, err = %e, "Failed to start program");
                 }
             }
@@ -125,7 +127,8 @@ impl<BackendData: Backend> AnvilState<BackendData> {
 
             KeyAction::LauncherActivate => {
                 if let Some(entry) = self.launcher.activate() {
-                    crate::launcher::launch_and_log(&entry);
+                    let envs: Vec<_> = self.compositor_envs().collect();
+                    crate::launcher::launch_and_log(&entry, envs);
                 }
             }
 
