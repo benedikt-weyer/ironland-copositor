@@ -158,12 +158,31 @@ fn parse_exec(exec: &str, name: &str) -> Option<(String, Vec<String>)> {
     Some((program, iter.collect()))
 }
 
+/// Applies compositor-provided environment overrides to `cmd`. A `None` value
+/// unsets the variable instead of setting it (used to strip an inherited
+/// `DISPLAY` so X11-capable toolkits can't fall back to the host's X server).
+fn apply_envs<'a>(cmd: &mut Command, envs: impl IntoIterator<Item = &'a (&'static str, Option<String>)>) {
+    for (key, value) in envs {
+        match value {
+            Some(value) => {
+                cmd.env(key, value);
+            }
+            None => {
+                cmd.env_remove(key);
+            }
+        }
+    }
+}
+
 /// Spawns the given desktop entry, respecting `Terminal=true` by wrapping the
 /// command in the user's terminal emulator. `envs` should set `WAYLAND_DISPLAY`
-/// (and `DISPLAY`, for XWayland clients) to the compositor's own sockets, so
-/// the launched app connects to this compositor instead of whatever session
-/// it was started from.
-pub fn launch(entry: &DesktopEntry, envs: impl IntoIterator<Item = (&'static str, String)>) -> std::io::Result<Child> {
+/// (and unset `DISPLAY` unless XWayland is running) to the compositor's own
+/// sockets, so the launched app connects to this compositor instead of
+/// whatever session it was started from.
+pub fn launch<'a>(
+    entry: &DesktopEntry,
+    envs: impl IntoIterator<Item = &'a (&'static str, Option<String>)>,
+) -> std::io::Result<Child> {
     let (program, args) = parse_exec(&entry.exec, &entry.name)
         .ok_or_else(|| std::io::Error::other(format!("empty Exec in {}", entry.id)))?;
 
@@ -171,18 +190,19 @@ pub fn launch(entry: &DesktopEntry, envs: impl IntoIterator<Item = (&'static str
 
     if entry.terminal {
         let terminal = env::var("TERMINAL").unwrap_or_else(|_| "weston-terminal".into());
-        Command::new(terminal)
-            .arg("-e")
-            .arg(&program)
-            .args(&args)
-            .envs(envs)
-            .spawn()
+        let mut cmd = Command::new(terminal);
+        cmd.arg("-e").arg(&program).args(&args);
+        apply_envs(&mut cmd, envs);
+        cmd.spawn()
     } else {
-        Command::new(&program).args(&args).envs(envs).spawn()
+        let mut cmd = Command::new(&program);
+        cmd.args(&args);
+        apply_envs(&mut cmd, envs);
+        cmd.spawn()
     }
 }
 
-pub fn launch_and_log(entry: &DesktopEntry, envs: impl IntoIterator<Item = (&'static str, String)>) {
+pub fn launch_and_log<'a>(entry: &DesktopEntry, envs: impl IntoIterator<Item = &'a (&'static str, Option<String>)>) {
     if let Err(e) = launch(entry, envs) {
         error!(id = entry.id, err = %e, "Failed to launch application");
     }

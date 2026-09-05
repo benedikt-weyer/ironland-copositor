@@ -65,17 +65,45 @@ impl<BackendData: Backend> AnvilState<BackendData> {
     /// Environment variables that point a spawned process at this compositor's
     /// own sockets, so it connects here instead of whatever session the
     /// compositor itself was started from.
-    fn compositor_envs(&self) -> impl Iterator<Item = (&'static str, String)> {
-        self.socket_name
-            .clone()
-            .map(|v| ("WAYLAND_DISPLAY", v))
-            .into_iter()
-            .chain(
-                #[cfg(feature = "xwayland")]
-                self.xdisplay.map(|v| ("DISPLAY", format!(":{v}"))),
-                #[cfg(not(feature = "xwayland"))]
-                None,
-            )
+    /// Environment for spawned clients: point them at this compositor's own
+    /// Wayland socket and, when there's no XWayland to fall back to, strip any
+    /// inherited `DISPLAY` so X11-capable toolkits can't quietly reconnect to
+    /// the host's X server instead of rendering here. `None` means "unset".
+    fn compositor_envs(&self) -> impl Iterator<Item = (&'static str, Option<String>)> {
+        let wayland_display = self.socket_name.clone().map(|v| ("WAYLAND_DISPLAY", Some(v)));
+
+        #[cfg(feature = "xwayland")]
+        let display = Some(("DISPLAY", self.xdisplay.map(|v| format!(":{v}"))));
+        #[cfg(not(feature = "xwayland"))]
+        let display = Some(("DISPLAY", None));
+
+        // Force Wayland-capable toolkits to use this compositor rather than
+        // falling back to X11 (which, without XWayland, would fail anyway).
+        let force_wayland = [
+            ("GDK_BACKEND", Some("wayland".to_string())),
+            ("QT_QPA_PLATFORM", Some("wayland".to_string())),
+            ("SDL_VIDEODRIVER", Some("wayland".to_string())),
+            ("CLUTTER_BACKEND", Some("wayland".to_string())),
+            ("MOZ_ENABLE_WAYLAND", Some("1".to_string())),
+            ("NIXOS_OZONE_WL", Some("1".to_string())),
+        ];
+
+        wayland_display.into_iter().chain(display).chain(force_wayland)
+    }
+
+    /// Applies [`compositor_envs`](Self::compositor_envs) to `cmd`, setting or
+    /// unsetting each variable as appropriate.
+    fn apply_compositor_envs(&self, cmd: &mut Command) {
+        for (key, value) in self.compositor_envs() {
+            match value {
+                Some(value) => {
+                    cmd.env(key, value);
+                }
+                None => {
+                    cmd.env_remove(key);
+                }
+            }
+        }
     }
 
     // Allow in this method because of existing usage
@@ -92,7 +120,9 @@ impl<BackendData: Backend> AnvilState<BackendData> {
             KeyAction::Run(cmd) => {
                 info!(cmd, "Starting program");
 
-                if let Err(e) = Command::new(&cmd).envs(self.compositor_envs()).spawn() {
+                let mut command = Command::new(&cmd);
+                self.apply_compositor_envs(&mut command);
+                if let Err(e) = command.spawn() {
                     error!(cmd, err = %e, "Failed to start program");
                 }
             }
@@ -128,7 +158,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
             KeyAction::LauncherActivate => {
                 if let Some(entry) = self.launcher.activate() {
                     let envs: Vec<_> = self.compositor_envs().collect();
-                    crate::launcher::launch_and_log(&entry, envs);
+                    crate::launcher::launch_and_log(&entry, &envs);
                 }
             }
 
