@@ -19,7 +19,7 @@ use smithay::{
         renderer::{
             ImportDma, ImportMemWl,
             damage::{Error as OutputDamageTrackerError, OutputDamageTracker},
-            element::AsRenderElements,
+            element::{AsRenderElements, Kind, memory::MemoryRenderBufferRenderElement},
             gles::GlesRenderer,
         },
         winit::{self, WinitEvent, WinitGraphicsBackend},
@@ -35,7 +35,7 @@ use smithay::{
         wayland_server::{Display, protocol::wl_surface},
         winit::event_loop::pump_events::PumpStatus,
     },
-    utils::{IsAlive, Scale, Transform},
+    utils::{IsAlive, Logical, Point, Scale, Transform},
     wayland::{
         compositor,
         dmabuf::{
@@ -264,6 +264,19 @@ pub fn run_winit() {
             #[cfg(feature = "debug")]
             fps_element.update_fps(fps);
 
+            let scale = Scale::from(output.current_scale().fractional_scale());
+            let launcher_buffer = state.launcher.ensure_buffer().cloned();
+            let launcher_location = launcher_buffer.as_ref().map(|_| {
+                let output_size = state.space.output_geometry(&output).unwrap().size;
+                let launcher_size = state.launcher.logical_size();
+                Point::<i32, Logical>::from((
+                    (output_size.w - launcher_size.w) / 2,
+                    (output_size.h - launcher_size.h) / 2,
+                ))
+                .to_f64()
+                .to_physical(scale)
+            });
+
             let full_redraw = &mut state.backend_data.full_redraw;
             *full_redraw = full_redraw.saturating_sub(1);
             let space = &mut state.space;
@@ -272,7 +285,6 @@ pub fn run_winit() {
 
             let dnd_icon = state.dnd_icon.as_ref();
 
-            let scale = Scale::from(output.current_scale().fractional_scale());
             let cursor_hotspot = if let CursorImageStatus::Surface(ref surface) = state.cursor_status {
                 compositor::with_states(surface, |states| {
                     states
@@ -345,6 +357,20 @@ pub fn run_winit() {
 
                 #[cfg(feature = "debug")]
                 elements.push(CustomRenderElements::Fps(fps_element.clone()));
+
+                if let (Some(launcher_buffer), Some(location)) = (&launcher_buffer, launcher_location) {
+                    if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
+                        renderer,
+                        location,
+                        launcher_buffer,
+                        None,
+                        None,
+                        None,
+                        Kind::Unspecified,
+                    ) {
+                        elements.push(CustomRenderElements::Launcher(element));
+                    }
+                }
 
                 render_output(
                     &output,

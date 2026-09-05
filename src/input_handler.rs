@@ -14,7 +14,7 @@ use smithay::{
     },
     desktop::{WindowSurfaceType, layer_map_for_output},
     input::{
-        keyboard::{FilterResult, Keysym, ModifiersState, keysyms as xkb},
+        keyboard::{FilterResult, Keysym, ModifiersState, keysyms as xkb, xkb as xkb_utf8},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
         tablet::{TabletDescriptor, TabletSeatTrait},
         touch::{DownEvent, UpEvent},
@@ -99,6 +99,36 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                 self.show_window_preview = !self.show_window_preview;
             }
 
+            KeyAction::ToggleLauncher => {
+                self.launcher.toggle();
+            }
+
+            KeyAction::LauncherType(c) => {
+                self.launcher.push_char(c);
+            }
+
+            KeyAction::LauncherBackspace => {
+                self.launcher.backspace();
+            }
+
+            KeyAction::LauncherUp => {
+                self.launcher.move_selection(-1);
+            }
+
+            KeyAction::LauncherDown => {
+                self.launcher.move_selection(1);
+            }
+
+            KeyAction::LauncherClose => {
+                self.launcher.close();
+            }
+
+            KeyAction::LauncherActivate => {
+                if let Some(entry) = self.launcher.activate() {
+                    crate::launcher::launch_and_log(&entry);
+                }
+            }
+
             KeyAction::ToggleDecorations => {
                 for element in self.space.elements() {
                     #[allow(irrefutable_let_patterns)]
@@ -172,7 +202,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
             .unwrap_or(false);
 
         let action = keyboard
-            .input(self, keycode, state, serial, time, |_, modifiers, handle| {
+            .input(self, keycode, state, serial, time, |data, modifiers, handle| {
                 let keysym = handle.modified_sym();
 
                 debug!(
@@ -181,6 +211,20 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                     keysym = ::xkbcommon::xkb::keysym_get_name(keysym),
                     "keysym"
                 );
+
+                // While the launcher overlay is open it grabs the whole keyboard:
+                // every key is consumed here instead of being forwarded to the
+                // focused client, whether or not it maps to a launcher action.
+                if data.launcher.is_visible() && !(modifiers.logo && keysym == Keysym::space) {
+                    if let KeyState::Pressed = state {
+                        let action = launcher_key_action(keysym);
+                        suppressed_keys.push(keysym);
+                        return FilterResult::Intercept(action);
+                    } else {
+                        suppressed_keys.retain(|k| *k != keysym);
+                        return FilterResult::Intercept(KeyAction::None);
+                    }
+                }
 
                 // If the key is pressed and triggered a action
                 // we will not forward the key to the client.
@@ -622,7 +666,14 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                     | KeyAction::Quit
                     | KeyAction::Run(_)
                     | KeyAction::TogglePreview
-                    | KeyAction::ToggleDecorations => self.process_common_key_action(action),
+                    | KeyAction::ToggleDecorations
+                    | KeyAction::ToggleLauncher
+                    | KeyAction::LauncherType(_)
+                    | KeyAction::LauncherBackspace
+                    | KeyAction::LauncherUp
+                    | KeyAction::LauncherDown
+                    | KeyAction::LauncherActivate
+                    | KeyAction::LauncherClose => self.process_common_key_action(action),
 
                     _ => tracing::warn!(
                         ?action,
@@ -844,7 +895,14 @@ impl AnvilState<UdevData> {
                     | KeyAction::Quit
                     | KeyAction::Run(_)
                     | KeyAction::TogglePreview
-                    | KeyAction::ToggleDecorations => self.process_common_key_action(action),
+                    | KeyAction::ToggleDecorations
+                    | KeyAction::ToggleLauncher
+                    | KeyAction::LauncherType(_)
+                    | KeyAction::LauncherBackspace
+                    | KeyAction::LauncherUp
+                    | KeyAction::LauncherDown
+                    | KeyAction::LauncherActivate
+                    | KeyAction::LauncherClose => self.process_common_key_action(action),
 
                     _ => unreachable!(),
                 },
@@ -1363,8 +1421,35 @@ enum KeyAction {
     RotateOutput,
     ToggleTint,
     ToggleDecorations,
+    /// Open or close the application launcher
+    ToggleLauncher,
+    /// Append a character to the launcher's search query
+    LauncherType(char),
+    LauncherBackspace,
+    LauncherUp,
+    LauncherDown,
+    /// Launch the currently selected application and close the launcher
+    LauncherActivate,
+    LauncherClose,
     /// Do nothing more
     None,
+}
+
+/// Translates a key press into a launcher action while the launcher overlay
+/// has keyboard focus. Anything that isn't a navigation key or a printable
+/// character is swallowed silently (`KeyAction::None`).
+fn launcher_key_action(keysym: Keysym) -> KeyAction {
+    match keysym {
+        Keysym::Escape => KeyAction::LauncherClose,
+        Keysym::Return | Keysym::KP_Enter => KeyAction::LauncherActivate,
+        Keysym::BackSpace => KeyAction::LauncherBackspace,
+        Keysym::Up => KeyAction::LauncherUp,
+        Keysym::Down => KeyAction::LauncherDown,
+        _ => match xkb_utf8::keysym_to_utf8(keysym).chars().next() {
+            Some(c) if !c.is_control() => KeyAction::LauncherType(c),
+            _ => KeyAction::None,
+        },
+    }
 }
 
 fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym) -> Option<KeyAction> {
@@ -1381,6 +1466,9 @@ fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym) -> Optio
     } else if modifiers.logo && keysym == Keysym::Return {
         // run terminal
         Some(KeyAction::Run("weston-terminal".into()))
+    } else if modifiers.logo && keysym == Keysym::space {
+        // open/close the application launcher
+        Some(KeyAction::ToggleLauncher)
     } else if modifiers.logo && (xkb::KEY_1..=xkb::KEY_9).contains(&keysym.raw()) {
         Some(KeyAction::Screen((keysym.raw() - xkb::KEY_1) as usize))
     } else if modifiers.logo && modifiers.shift && keysym == Keysym::M {

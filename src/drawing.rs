@@ -1,18 +1,23 @@
 #![allow(clippy::too_many_arguments)]
 
 use smithay::{
-    backend::renderer::{
-        Color32F, ImportAll, ImportMem, Renderer, Texture,
-        element::{
-            AsRenderElements, Kind,
-            memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
-            surface::WaylandSurfaceRenderElement,
+    backend::{
+        allocator::Fourcc,
+        renderer::{
+            Color32F, ImportAll, ImportMem, Renderer, Texture,
+            element::{
+                AsRenderElements, Kind,
+                memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
+                surface::WaylandSurfaceRenderElement,
+            },
         },
     },
     input::pointer::CursorImageStatus,
     render_elements,
-    utils::{Physical, Point, Scale},
+    utils::{Logical, Physical, Point, Scale, Size, Transform},
 };
+
+use crate::{font::Canvas, launcher::DesktopEntry};
 #[cfg(feature = "debug")]
 use smithay::{
     backend::renderer::{
@@ -20,7 +25,7 @@ use smithay::{
         element::{Element, Id, RenderElement},
         utils::CommitCounter,
     },
-    utils::{Buffer, Logical, Rectangle, Size, Transform, user_data::UserDataMap},
+    utils::{Buffer, Rectangle, user_data::UserDataMap},
 };
 
 pub static CLEAR_COLOR: Color32F = Color32F::new(0.8, 0.8, 0.9, 1.0);
@@ -256,4 +261,198 @@ where
 
         Ok(())
     }
+}
+
+const LAUNCHER_WIDTH: i32 = 480;
+const LAUNCHER_ROW_HEIGHT: i32 = 26;
+const LAUNCHER_HEADER_HEIGHT: i32 = 36;
+const LAUNCHER_PADDING: i32 = 10;
+const LAUNCHER_MAX_ROWS: usize = 8;
+const LAUNCHER_FONT_SCALE: i32 = 2;
+
+const COLOR_BACKGROUND: [u8; 4] = [40, 34, 30, 255];
+const COLOR_HEADER_BG: [u8; 4] = [70, 60, 52, 255];
+const COLOR_SELECTED_BG: [u8; 4] = [120, 90, 40, 255];
+const COLOR_TEXT: [u8; 4] = [235, 230, 225, 255];
+const COLOR_MUTED_TEXT: [u8; 4] = [150, 140, 130, 255];
+
+/// State for the built-in application launcher: a search query over the
+/// user's XDG desktop entries, rendered as an on-screen overlay.
+#[derive(Debug)]
+pub struct LauncherState {
+    pub visible: bool,
+    query: String,
+    entries: Vec<DesktopEntry>,
+    filtered: Vec<usize>,
+    selected: usize,
+    buffer: Option<MemoryRenderBuffer>,
+    dirty: bool,
+}
+
+impl Default for LauncherState {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            query: String::new(),
+            entries: Vec::new(),
+            filtered: Vec::new(),
+            selected: 0,
+            buffer: None,
+            dirty: true,
+        }
+    }
+}
+
+impl LauncherState {
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// Opens the launcher, (re-)scanning desktop entries so newly installed
+    /// applications show up without restarting the compositor.
+    pub fn open(&mut self) {
+        self.entries = crate::launcher::scan_desktop_entries();
+        self.query.clear();
+        self.selected = 0;
+        self.filtered = crate::launcher::filter_entries(&self.entries, &self.query);
+        self.visible = true;
+        self.dirty = true;
+    }
+
+    pub fn close(&mut self) {
+        self.visible = false;
+        self.buffer = None;
+        self.dirty = true;
+    }
+
+    pub fn toggle(&mut self) {
+        if self.visible {
+            self.close();
+        } else {
+            self.open();
+        }
+    }
+
+    pub fn push_char(&mut self, c: char) {
+        self.query.push(c);
+        self.refresh_filter();
+    }
+
+    pub fn backspace(&mut self) {
+        self.query.pop();
+        self.refresh_filter();
+    }
+
+    fn refresh_filter(&mut self) {
+        self.filtered = crate::launcher::filter_entries(&self.entries, &self.query);
+        self.selected = 0;
+        self.dirty = true;
+    }
+
+    pub fn move_selection(&mut self, delta: i32) {
+        if self.filtered.is_empty() {
+            return;
+        }
+        let len = self.filtered.len() as i32;
+        let next = (self.selected as i32 + delta).rem_euclid(len);
+        self.selected = next as usize;
+        self.dirty = true;
+    }
+
+    /// Closes the launcher and returns the currently selected entry, if any.
+    pub fn activate(&mut self) -> Option<DesktopEntry> {
+        let entry = self
+            .filtered
+            .get(self.selected)
+            .and_then(|&i| self.entries.get(i))
+            .cloned();
+        self.close();
+        entry
+    }
+
+    /// The logical size of the overlay, so callers can center it on the output.
+    pub fn logical_size(&self) -> Size<i32, Logical> {
+        let rows = self.filtered.len().clamp(1, LAUNCHER_MAX_ROWS);
+        let height = LAUNCHER_HEADER_HEIGHT + rows as i32 * LAUNCHER_ROW_HEIGHT + LAUNCHER_PADDING * 2;
+        Size::from((LAUNCHER_WIDTH, height))
+    }
+
+    fn rasterize(&self) -> Canvas {
+        let size = self.logical_size();
+        let mut canvas = Canvas::new(size.w as usize, size.h as usize, COLOR_BACKGROUND);
+
+        canvas.fill_rect(0, 0, size.w, LAUNCHER_HEADER_HEIGHT, COLOR_HEADER_BG);
+        let prompt = format!("> {}", self.query);
+        canvas.draw_text(
+            LAUNCHER_PADDING,
+            (LAUNCHER_HEADER_HEIGHT - GLYPH_LINE_HEIGHT * LAUNCHER_FONT_SCALE) / 2,
+            &prompt,
+            LAUNCHER_FONT_SCALE,
+            COLOR_TEXT,
+        );
+
+        if self.filtered.is_empty() {
+            canvas.draw_text(
+                LAUNCHER_PADDING,
+                LAUNCHER_HEADER_HEIGHT + LAUNCHER_PADDING,
+                "No matching applications",
+                LAUNCHER_FONT_SCALE,
+                COLOR_MUTED_TEXT,
+            );
+        } else {
+            for (row, &entry_idx) in self.filtered.iter().take(LAUNCHER_MAX_ROWS).enumerate() {
+                let row_y = LAUNCHER_HEADER_HEIGHT + row as i32 * LAUNCHER_ROW_HEIGHT;
+                if row == self.selected {
+                    canvas.fill_rect(0, row_y, size.w, LAUNCHER_ROW_HEIGHT, COLOR_SELECTED_BG);
+                }
+                let name = &self.entries[entry_idx].name;
+                let max_chars = ((size.w - LAUNCHER_PADDING * 2)
+                    / ((crate::font::GLYPH_WIDTH as i32 + 1) * LAUNCHER_FONT_SCALE))
+                    as usize;
+                let display = truncate(name, max_chars);
+                canvas.draw_text(
+                    LAUNCHER_PADDING,
+                    row_y + (LAUNCHER_ROW_HEIGHT - GLYPH_LINE_HEIGHT * LAUNCHER_FONT_SCALE) / 2,
+                    &display,
+                    LAUNCHER_FONT_SCALE,
+                    COLOR_TEXT,
+                );
+            }
+        }
+
+        canvas
+    }
+
+    /// Returns the memory buffer to render, rebuilding it if the launcher
+    /// state has changed since the last frame.
+    pub fn ensure_buffer(&mut self) -> Option<&MemoryRenderBuffer> {
+        if !self.visible {
+            return None;
+        }
+        if self.dirty || self.buffer.is_none() {
+            let canvas = self.rasterize();
+            self.buffer = Some(MemoryRenderBuffer::from_slice(
+                &canvas.pixels,
+                Fourcc::Argb8888,
+                (canvas.width as i32, canvas.height as i32),
+                1,
+                Transform::Normal,
+                None,
+            ));
+            self.dirty = false;
+        }
+        self.buffer.as_ref()
+    }
+}
+
+const GLYPH_LINE_HEIGHT: i32 = crate::font::GLYPH_HEIGHT as i32;
+
+fn truncate(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let keep = max_chars.saturating_sub(2);
+    let mut out: String = s.chars().take(keep).collect();
+    out.push_str("..");
+    out
 }

@@ -47,7 +47,10 @@ use smithay::{
         renderer::{
             DebugFlags, ImportDma, ImportMemWl,
             damage::Error as OutputDamageTrackerError,
-            element::{AsRenderElements, RenderElementStates, memory::MemoryRenderBuffer},
+            element::{
+                AsRenderElements, Kind, RenderElementStates,
+                memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
+            },
             gles::{Capability, GlesRenderer},
             multigpu::{GpuManager, MultiRenderer, gbm::GbmGlesBackend},
         },
@@ -1489,6 +1492,7 @@ impl AnvilState<UdevData> {
             &self.dnd_icon,
             &mut self.cursor_status,
             self.show_window_preview,
+            &mut self.launcher,
         );
         let reschedule = match result {
             Ok((has_rendered, states)) => {
@@ -1570,6 +1574,7 @@ fn render_surface<'a>(
     dnd_icon: &Option<DndIcon>,
     cursor_status: &mut CursorImageStatus,
     show_window_preview: bool,
+    launcher: &mut LauncherState,
 ) -> Result<(bool, RenderElementStates), SwapBuffersError> {
     let output_geometry = space.output_geometry(output).unwrap();
     let scale = Scale::from(output.current_scale().fractional_scale());
@@ -1644,6 +1649,27 @@ fn render_surface<'a>(
         element.update_fps(surface.fps.avg().round() as u32);
         surface.fps.tick();
         custom_elements.push(CustomRenderElements::Fps(element.clone()));
+    }
+
+    let launcher_size = launcher.logical_size();
+    if let Some(launcher_buffer) = launcher.ensure_buffer() {
+        let location = Point::<i32, Logical>::from((
+            (output_geometry.size.w - launcher_size.w) / 2,
+            (output_geometry.size.h - launcher_size.h) / 2,
+        ))
+        .to_f64()
+        .to_physical(scale);
+        if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            location,
+            launcher_buffer,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        ) {
+            custom_elements.push(CustomRenderElements::Launcher(element));
+        }
     }
 
     let (elements, clear_color) =
