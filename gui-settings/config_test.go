@@ -47,7 +47,7 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 		t.Fatalf("loadConfig shortcuts[quit] = %v", loaded.Shortcuts["quit"])
 	}
 	// An action untouched by the override should keep its built-in default.
-	if !reflect.DeepEqual(loaded.Shortcuts["toggle_launcher"], []string{"ctrl+space"}) {
+	if !reflect.DeepEqual(loaded.Shortcuts["toggle_launcher"], []string{"super+space"}) {
 		t.Fatalf("loadConfig shortcuts[toggle_launcher] = %v", loaded.Shortcuts["toggle_launcher"])
 	}
 }

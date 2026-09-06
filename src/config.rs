@@ -201,28 +201,28 @@ fn default_terminal() -> String {
 /// behaves exactly as before.
 fn default_shortcuts() -> HashMap<String, Vec<String>> {
     [
-        ("quit", vec!["ctrl+alt+backspace", "ctrl+q"]),
-        ("run_terminal", vec!["ctrl+return"]),
-        ("toggle_launcher", vec!["ctrl+space"]),
-        ("toggle_floating", vec!["ctrl+shift+space"]),
-        ("focus_left", vec!["ctrl+left"]),
-        ("focus_right", vec!["ctrl+right"]),
-        ("focus_up", vec!["ctrl+up"]),
-        ("focus_down", vec!["ctrl+down"]),
-        ("swap_left", vec!["ctrl+shift+left"]),
-        ("swap_right", vec!["ctrl+shift+right"]),
-        ("swap_up", vec!["ctrl+shift+up"]),
-        ("swap_down", vec!["ctrl+shift+down"]),
-        ("resize_left", vec!["ctrl+alt+left"]),
-        ("resize_right", vec!["ctrl+alt+right"]),
-        ("resize_up", vec!["ctrl+alt+up"]),
-        ("resize_down", vec!["ctrl+alt+down"]),
-        ("scale_up", vec!["ctrl+shift+p"]),
-        ("scale_down", vec!["ctrl+shift+m"]),
-        ("toggle_preview", vec!["ctrl+shift+w"]),
-        ("rotate_output", vec!["ctrl+shift+r"]),
-        ("toggle_tint", vec!["ctrl+shift+t"]),
-        ("toggle_decorations", vec!["ctrl+shift+d"]),
+        ("quit", vec!["super+alt+backspace", "super+q"]),
+        ("run_terminal", vec!["super+return"]),
+        ("toggle_launcher", vec!["super+space"]),
+        ("toggle_floating", vec!["super+shift+space"]),
+        ("focus_left", vec!["super+left"]),
+        ("focus_right", vec!["super+right"]),
+        ("focus_up", vec!["super+up"]),
+        ("focus_down", vec!["super+down"]),
+        ("swap_left", vec!["super+shift+left"]),
+        ("swap_right", vec!["super+shift+right"]),
+        ("swap_up", vec!["super+shift+up"]),
+        ("swap_down", vec!["super+shift+down"]),
+        ("resize_left", vec!["super+alt+left"]),
+        ("resize_right", vec!["super+alt+right"]),
+        ("resize_up", vec!["super+alt+up"]),
+        ("resize_down", vec!["super+alt+down"]),
+        ("scale_up", vec!["super+shift+p"]),
+        ("scale_down", vec!["super+shift+m"]),
+        ("toggle_preview", vec!["super+shift+w"]),
+        ("rotate_output", vec!["super+shift+r"]),
+        ("toggle_tint", vec!["super+shift+t"]),
+        ("toggle_decorations", vec!["super+shift+d"]),
     ]
     .into_iter()
     .map(|(name, keys)| (name.to_string(), keys.into_iter().map(String::from).collect()))
@@ -465,7 +465,7 @@ mod tests {
         merged.extend(raw.shortcuts);
 
         assert_eq!(merged["quit"], vec!["ctrl+alt+q"]);
-        assert_eq!(merged["toggle_launcher"], vec!["ctrl+space"]);
+        assert_eq!(merged["toggle_launcher"], vec!["super+space"]);
     }
 
     fn size(w: i32, h: i32) -> Size<i32, Logical> {

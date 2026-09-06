@@ -111,7 +111,7 @@ func buildKeyboardTab(cfg *Config) fyne.CanvasObject {
 
 // buildShortcutsTab lays out one editable row per known action, each
 // holding its bound key combos as a comma-separated list (e.g.
-// "ctrl+left, ctrl+kp_left").
+// "super+left, super+kp_left").
 func buildShortcutsTab(cfg *Config) fyne.CanvasObject {
 	form := widget.NewForm()
 
@@ -119,7 +119,7 @@ func buildShortcutsTab(cfg *Config) fyne.CanvasObject {
 		action := action // capture for the closure below
 		entry := widget.NewEntry()
 		entry.SetText(strings.Join(cfg.Shortcuts[action], ", "))
-		entry.SetPlaceHolder("e.g. ctrl+shift+q")
+		entry.SetPlaceHolder("e.g. super+shift+q")
 		entry.OnChanged = func(s string) {
 			cfg.Shortcuts[action] = splitKeyCombos(s)
 		}
@@ -131,7 +131,7 @@ func buildShortcutsTab(cfg *Config) fyne.CanvasObject {
 		form.Append(label, entry)
 	}
 
-	hint := widget.NewLabel("Separate multiple key combos for the same action with commas. A combo is modifiers and a key joined with '+', e.g. \"ctrl+alt+left\".")
+	hint := widget.NewLabel("Separate multiple key combos for the same action with commas. A combo is modifiers and a key joined with '+', e.g. \"super+alt+left\".")
 	hint.Wrapping = fyne.TextWrapWord
 
 	return container.NewBorder(nil, hint, nil, nil, container.NewVScroll(container.NewVBox(form)))
