@@ -35,7 +35,7 @@ in
         shortcuts = {
           # Overrides just this one binding; every other shortcut keeps
           # its built-in default.
-          toggle_launcher = [ "ctrl+space" ];
+          toggle_launcher = [ "super+space" ];
         };
         outputs = {
           "eDP-1".primary = true;

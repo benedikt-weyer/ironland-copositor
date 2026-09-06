@@ -196,6 +196,17 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                 }
             }
 
+            KeyAction::KillWindow => {
+                if let Some(keyboard) = self.seat.get_keyboard() {
+                    if let Some(crate::focus::KeyboardFocusTarget::Window(w)) = keyboard.current_focus() {
+                        #[allow(irrefutable_let_patterns)]
+                        if let Some(toplevel) = w.toplevel() {
+                            toplevel.send_close();
+                        }
+                    }
+                }
+            }
+
             KeyAction::FocusDirection(dir) => {
                 crate::shell::tiling::focus_direction(self, dir);
             }
@@ -731,6 +742,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                     | KeyAction::LauncherActivate
                     | KeyAction::LauncherClose
                     | KeyAction::ToggleFloating
+                    | KeyAction::KillWindow
                     | KeyAction::FocusDirection(_)
                     | KeyAction::SwapDirection(_)
                     | KeyAction::ResizeTiled(_) => self.process_common_key_action(action),
@@ -967,6 +979,7 @@ impl AnvilState<UdevData> {
                     | KeyAction::LauncherActivate
                     | KeyAction::LauncherClose
                     | KeyAction::ToggleFloating
+                    | KeyAction::KillWindow
                     | KeyAction::FocusDirection(_)
                     | KeyAction::SwapDirection(_)
                     | KeyAction::ResizeTiled(_) => self.process_common_key_action(action),
@@ -1490,6 +1503,8 @@ pub(crate) enum KeyAction {
     ToggleDecorations,
     /// Float or re-tile the focused window
     ToggleFloating,
+    /// Close the focused window
+    KillWindow,
     /// Move keyboard focus to the tiled window in a direction
     FocusDirection(crate::shell::tiling::Direction),
     /// Swap the focused tiled window with its neighbor in a direction
@@ -1538,6 +1553,7 @@ fn action_for_name(name: &str, terminal: &str) -> Option<KeyAction> {
         "run_terminal" => KeyAction::Run(terminal.to_string()),
         "toggle_launcher" => KeyAction::ToggleLauncher,
         "toggle_floating" => KeyAction::ToggleFloating,
+        "kill_window" => KeyAction::KillWindow,
         "focus_left" => KeyAction::FocusDirection(Direction::Left),
         "focus_right" => KeyAction::FocusDirection(Direction::Right),
         "focus_up" => KeyAction::FocusDirection(Direction::Up),

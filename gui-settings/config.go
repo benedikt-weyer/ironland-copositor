@@ -60,6 +60,7 @@ var knownActions = []string{
 	"run_terminal",
 	"toggle_launcher",
 	"toggle_floating",
+	"kill_window",
 	"focus_left",
 	"focus_right",
 	"focus_up",
@@ -86,6 +87,7 @@ var actionLabels = map[string]string{
 	"run_terminal":       "Open terminal",
 	"toggle_launcher":    "Toggle app launcher",
 	"toggle_floating":    "Toggle floating/tiled",
+	"kill_window":        "Kill active window",
 	"focus_left":         "Focus window: left",
 	"focus_right":        "Focus window: right",
 	"focus_up":           "Focus window: up",
@@ -112,9 +114,10 @@ var actionLabels = map[string]string{
 func defaultShortcuts() map[string][]string {
 	return map[string][]string{
 		"quit":               {"super+alt+backspace", "super+q"},
-		"run_terminal":       {"super+return"},
+		"run_terminal":       {"super+c"},
 		"toggle_launcher":    {"super+space"},
 		"toggle_floating":    {"super+shift+space"},
+		"kill_window":        {"super+x"},
 		"focus_left":         {"super+left"},
 		"focus_right":        {"super+right"},
 		"focus_up":           {"super+up"},

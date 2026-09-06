@@ -202,9 +202,10 @@ fn default_terminal() -> String {
 fn default_shortcuts() -> HashMap<String, Vec<String>> {
     [
         ("quit", vec!["super+alt+backspace", "super+q"]),
-        ("run_terminal", vec!["super+return"]),
+        ("run_terminal", vec!["super+c"]),
         ("toggle_launcher", vec!["super+space"]),
         ("toggle_floating", vec!["super+shift+space"]),
+        ("kill_window", vec!["super+x"]),
         ("focus_left", vec!["super+left"]),
         ("focus_right", vec!["super+right"]),
         ("focus_up", vec!["super+up"]),
@@ -237,6 +238,7 @@ pub fn known_actions() -> Vec<&'static str> {
         "run_terminal",
         "toggle_launcher",
         "toggle_floating",
+        "kill_window",
         "focus_left",
         "focus_right",
         "focus_up",
