@@ -163,6 +163,7 @@ pub struct Keybinding {
 struct RawConfig {
     keyboard: KeyboardSettings,
     terminal: Option<String>,
+    top_bar: bool,
     shortcuts: HashMap<String, Vec<String>>,
     outputs: HashMap<String, OutputSettings>,
 }
@@ -171,6 +172,11 @@ struct RawConfig {
 pub struct Config {
     pub keyboard: KeyboardSettings,
     pub terminal: String,
+    /// Whether an external top bar/shell (e.g. caelestia-shell) should be
+    /// started alongside the compositor. Off by default: the compositor
+    /// itself never draws one, so this only matters to launch scripts that
+    /// check it. See `nix/module.nix` for how the NixOS module uses it.
+    pub top_bar: bool,
     /// action name -> key combos, e.g. `"toggle_launcher" -> ["ctrl+space"]`.
     /// Always fully populated: entries not overridden by the config file
     /// keep their built-in default.
@@ -186,6 +192,7 @@ impl Default for Config {
         Config {
             keyboard: KeyboardSettings::default(),
             terminal: default_terminal(),
+            top_bar: false,
             shortcuts: default_shortcuts(),
             outputs: HashMap::new(),
         }
@@ -310,6 +317,7 @@ impl Config {
             return Config {
                 keyboard: raw.keyboard,
                 terminal: raw.terminal.unwrap_or_else(default_terminal),
+                top_bar: raw.top_bar,
                 shortcuts,
                 outputs: raw.outputs,
             };
@@ -459,6 +467,7 @@ mod tests {
         let raw = RawConfig {
             keyboard: KeyboardSettings::default(),
             terminal: None,
+            top_bar: false,
             shortcuts,
             outputs: HashMap::new(),
         };
@@ -476,6 +485,15 @@ mod tests {
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
         Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn top_bar_defaults_to_disabled_but_can_be_enabled() {
+        let raw: RawConfig = toml::from_str("").unwrap();
+        assert!(!raw.top_bar);
+
+        let raw: RawConfig = toml::from_str("top_bar = true").unwrap();
+        assert!(raw.top_bar);
     }
 
     #[test]

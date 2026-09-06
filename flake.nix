@@ -187,7 +187,24 @@
                 sleep 0.1
               done
 
-              if [ -n "$socket" ]; then
+              # Mirrors the compositor's own config search order (src/config.rs)
+              # so the bar's autostart agrees with whatever `top_bar` the
+              # compositor itself is honoring. Off unless a config file
+              # explicitly sets `top_bar = true`.
+              config_file=""
+              for candidate in "''${IRONLAND_COMPOSITOR_CONFIG:-}" "''${XDG_CONFIG_HOME:-$HOME/.config}/ironland-copositor/config.toml" "/etc/ironland-copositor/config.toml"; do
+                if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+                  config_file="$candidate"
+                  break
+                fi
+              done
+
+              top_bar_enabled=false
+              if [ -n "$config_file" ] && grep -Eq '^[[:space:]]*top_bar[[:space:]]*=[[:space:]]*true[[:space:]]*(#.*)?$' "$config_file"; then
+                top_bar_enabled=true
+              fi
+
+              if [ -n "$socket" ] && [ "$top_bar_enabled" = true ]; then
                 WAYLAND_DISPLAY=$(basename "$socket") ${pkgs.caelestia-shell}/bin/caelestia-shell &
               fi
 

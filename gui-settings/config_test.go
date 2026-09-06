@@ -23,6 +23,7 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 	cfg.Keyboard.Layout = "de"
 	cfg.Keyboard.Variant = "nodeadkeys"
 	cfg.Terminal = "alacritty"
+	cfg.TopBar = true
 	cfg.Shortcuts["quit"] = []string{"ctrl+alt+q"}
 
 	path, err := saveConfig(cfg)
@@ -42,6 +43,9 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 	}
 	if loaded.Terminal != "alacritty" {
 		t.Fatalf("loadConfig terminal = %q, want alacritty", loaded.Terminal)
+	}
+	if !loaded.TopBar {
+		t.Fatalf("loadConfig topBar = %v, want true", loaded.TopBar)
 	}
 	if !reflect.DeepEqual(loaded.Shortcuts["quit"], []string{"ctrl+alt+q"}) {
 		t.Fatalf("loadConfig shortcuts[quit] = %v", loaded.Shortcuts["quit"])

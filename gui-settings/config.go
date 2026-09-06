@@ -23,6 +23,7 @@ type KeyboardSettings struct {
 type Config struct {
 	Keyboard  KeyboardSettings          `toml:"keyboard"`
 	Terminal  string                    `toml:"terminal"`
+	TopBar    bool                      `toml:"top_bar"`
 	Shortcuts map[string][]string       `toml:"shortcuts"`
 	Outputs   map[string]OutputSettings `toml:"outputs"`
 }
@@ -201,6 +202,7 @@ func loadConfig() (Config, string) {
 		if raw.Terminal != "" {
 			cfg.Terminal = raw.Terminal
 		}
+		cfg.TopBar = raw.TopBar
 		cfg.Keyboard = raw.Keyboard
 		for action, keys := range raw.Shortcuts {
 			cfg.Shortcuts[action] = keys

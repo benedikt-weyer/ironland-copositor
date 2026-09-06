@@ -15,8 +15,10 @@ in
       compositor's `src/config.rs` for the full schema: keyboard layout
       under `keyboard` (passed straight through to xkbcommon), the
       terminal launched by the `run_terminal` shortcut under `terminal`,
-      key bindings under `shortcuts` — only the actions you set there
-      override the built-in defaults, so a partial table is fine — and
+      `top_bar` (whether to autostart an external top bar/shell such as
+      caelestia-shell; off by default), key bindings under `shortcuts` —
+      only the actions you set there override the built-in defaults, so a
+      partial table is fine — and
       per-monitor settings under `outputs.<connector-name>` (e.g.
       `outputs."eDP-1"`, `outputs."HDMI-A-1"`): `primary` marks the main
       monitor, `mirror_of` duplicates another output's position onto this

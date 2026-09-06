@@ -94,6 +94,9 @@ func buildKeyboardTab(cfg *Config) fyne.CanvasObject {
 	terminal.SetPlaceHolder("command run by the \"Open terminal\" shortcut")
 	terminal.OnChanged = func(s string) { cfg.Terminal = s }
 
+	topBar := widget.NewCheck("", func(checked bool) { cfg.TopBar = checked })
+	topBar.SetChecked(cfg.TopBar)
+
 	form := widget.NewForm(
 		widget.NewFormItem("Layout", layout),
 		widget.NewFormItem("Variant", variant),
@@ -101,9 +104,10 @@ func buildKeyboardTab(cfg *Config) fyne.CanvasObject {
 		widget.NewFormItem("Options", options),
 		widget.NewFormItem("Rules", rules),
 		widget.NewFormItem("Terminal command", terminal),
+		widget.NewFormItem("Show top bar", topBar),
 	)
 
-	hint := widget.NewLabel("Keyboard fields are passed straight to xkbcommon; leave a field empty to use its system default.")
+	hint := widget.NewLabel("Keyboard fields are passed straight to xkbcommon; leave a field empty to use its system default. The top bar (an external shell such as caelestia-shell) is off by default.")
 	hint.Wrapping = fyne.TextWrapWord
 
 	return container.NewVBox(form, hint)
