@@ -16,7 +16,7 @@ in
       under `keyboard` (passed straight through to xkbcommon), the
       terminal launched by the `run_terminal` shortcut under `terminal`,
       `top_bar` (whether to autostart an external top bar/shell such as
-      caelestia-shell; off by default), key bindings under `shortcuts` —
+      noctalia-shell; off by default), key bindings under `shortcuts` —
       only the actions you set there override the built-in defaults, so a
       partial table is fine — and
       per-monitor settings under `outputs.<connector-name>` (e.g.

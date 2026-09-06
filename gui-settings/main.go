@@ -109,7 +109,7 @@ func buildKeyboardTab(cfg *Config) fyne.CanvasObject {
 		widget.NewFormItem("Show top bar", topBar),
 	)
 
-	hint := widget.NewLabel("Keyboard fields are passed straight to xkbcommon; leave a field empty to use its system default. The top bar (an external shell such as caelestia-shell) is off by default.")
+	hint := widget.NewLabel("Keyboard fields are passed straight to xkbcommon; leave a field empty to use its system default. The top bar (an external shell such as noctalia-shell) is off by default.")
 	hint.Wrapping = fyne.TextWrapWord
 
 	return container.NewVBox(form, hint)

@@ -1459,12 +1459,19 @@ impl AnvilState<UdevData> {
             return pos;
         }
 
+        // Output geometry hit-testing (e.g. `Rectangle::contains`) treats the
+        // output's bounds as half-open (`[loc, loc + size)`), so a pointer
+        // clamped to exactly the rightmost/bottommost coordinate would fall
+        // just outside every output and fail to hit any window there. Back
+        // off by a tiny epsilon so the pointer stays inside the last output.
+        const EDGE_EPSILON: f64 = 0.01;
+
         let (pos_x, pos_y) = pos.into();
         let max_x = self
             .space
             .outputs()
             .fold(0, |acc, o| acc + self.space.output_geometry(o).unwrap().size.w);
-        let clamped_x = pos_x.clamp(0.0, max_x as f64);
+        let clamped_x = pos_x.clamp(0.0, max_x as f64 - EDGE_EPSILON);
         let max_y = self
             .space
             .outputs()
@@ -1475,7 +1482,7 @@ impl AnvilState<UdevData> {
             .map(|o| self.space.output_geometry(o).unwrap().size.h);
 
         if let Some(max_y) = max_y {
-            let clamped_y = pos_y.clamp(0.0, max_y as f64);
+            let clamped_y = pos_y.clamp(0.0, max_y as f64 - EDGE_EPSILON);
             (clamped_x, clamped_y).into()
         } else {
             (clamped_x, pos_y).into()

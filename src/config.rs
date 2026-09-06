@@ -172,7 +172,7 @@ struct RawConfig {
 pub struct Config {
     pub keyboard: KeyboardSettings,
     pub terminal: String,
-    /// Whether an external top bar/shell (e.g. caelestia-shell) should be
+    /// Whether an external top bar/shell (e.g. noctalia-shell) should be
     /// started alongside the compositor. Off by default: the compositor
     /// itself never draws one, so this only matters to launch scripts that
     /// check it. See `nix/module.nix` for how the NixOS module uses it.
