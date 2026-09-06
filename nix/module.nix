@@ -29,7 +29,18 @@ in
       one, and `position` places this output relative to another
       (`right_of`/`left_of`/`above`/`below`, each an output name) or at an
       absolute `{ x, y }`. An output not listed here is auto-placed to the
-      right of the others, matching the compositor's previous behavior.
+      right of the others, matching the compositor's previous behavior. And
+      virtual desktops under `workspaces`: `mode` is `"per_monitor"`
+      (default, each output has its own set) or `"combined"` (every output
+      switches together); `count` is the starting number of workspaces
+      (default 4); `dynamic` (default false), if true, grows the count on
+      demand and prunes empty trailing workspaces automatically instead of
+      keeping it fixed at `count`; `overlay` (default true) shows a row of
+      dots on screen briefly whenever the active workspace changes. Switch
+      workspaces with Super+Left/Right and move the focused window to an
+      adjacent one with Super+Alt+Left/Right (both rebindable in
+      `shortcuts` as `workspace_left`/`workspace_right` and
+      `move_workspace_left`/`move_workspace_right`).
     '';
     example = lib.literalExpression ''
       {

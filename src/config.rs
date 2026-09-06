@@ -147,6 +147,47 @@ pub fn resolve_output_position(
     (x, 0).into()
 }
 
+/// Whether workspaces are independent per output ("split") or shared across
+/// every connected output ("combined", i.e. switching workspaces moves every
+/// monitor to the same slot at once, GNOME-style).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMode {
+    #[default]
+    PerMonitor,
+    Combined,
+}
+
+/// Workspace settings: how many virtual desktops exist, whether outputs
+/// share them or each gets their own, and whether the on-screen dot
+/// indicator (shown briefly on switch) is enabled.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct WorkspaceSettings {
+    pub mode: WorkspaceMode,
+    /// How many workspaces each output (or the whole session, in `Combined`
+    /// mode) starts with.
+    pub count: usize,
+    /// If true, the workspace count isn't fixed at `count`: switching or
+    /// moving a window past the last workspace creates a new one on demand,
+    /// and trailing empty workspaces are dropped again automatically.
+    pub dynamic: bool,
+    /// Whether to flash a row of dots (like GNOME's workspace switcher) on
+    /// screen briefly whenever the active workspace changes.
+    pub overlay: bool,
+}
+
+impl Default for WorkspaceSettings {
+    fn default() -> Self {
+        WorkspaceSettings {
+            mode: WorkspaceMode::default(),
+            count: 4,
+            dynamic: false,
+            overlay: true,
+        }
+    }
+}
+
 /// A single parsed keybinding: the modifiers/key it fires on, and the name
 /// of the action to run (looked up against the compositor's own action
 /// table, since the set of possible actions is compositor-specific and this
@@ -168,6 +209,7 @@ struct RawConfig {
     top_bar: bool,
     shortcuts: HashMap<String, Vec<String>>,
     outputs: HashMap<String, OutputSettings>,
+    workspaces: WorkspaceSettings,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +234,8 @@ pub struct Config {
     /// not present here use [`OutputSettings::default`] (auto-placed,
     /// extended, not primary).
     pub outputs: HashMap<String, OutputSettings>,
+    /// Virtual desktop settings (see [`WorkspaceSettings`]).
+    pub workspaces: WorkspaceSettings,
 }
 
 impl Default for Config {
@@ -204,6 +248,7 @@ impl Default for Config {
             top_bar: false,
             shortcuts: default_shortcuts(),
             outputs: HashMap::new(),
+            workspaces: WorkspaceSettings::default(),
         }
     }
 }
@@ -232,18 +277,30 @@ fn default_shortcuts() -> HashMap<String, Vec<String>> {
         ("open_file_manager", vec!["super+f"]),
         ("toggle_floating", vec!["super+shift+space"]),
         ("kill_window", vec!["super+x"]),
-        ("focus_left", vec!["super+left"]),
-        ("focus_right", vec!["super+right"]),
+        // `focus_left`/`focus_right` used to default to bare `super+left`/
+        // `super+right`, but those combos now switch workspaces (see
+        // `workspace_left`/`workspace_right` below), so focus-by-direction
+        // moved to `super+ctrl+left/right` for the left/right pair only;
+        // up/down were never in the way and keep their original combo.
+        ("focus_left", vec!["super+ctrl+left"]),
+        ("focus_right", vec!["super+ctrl+right"]),
         ("focus_up", vec!["super+up"]),
         ("focus_down", vec!["super+down"]),
         ("swap_left", vec!["super+shift+left"]),
         ("swap_right", vec!["super+shift+right"]),
         ("swap_up", vec!["super+shift+up"]),
         ("swap_down", vec!["super+shift+down"]),
-        ("resize_left", vec!["super+alt+left"]),
-        ("resize_right", vec!["super+alt+right"]),
+        // Likewise, `resize_left`/`resize_right` moved off `super+alt+left/
+        // right`, which now moves the focused window to an adjacent
+        // workspace (see `move_workspace_left`/`move_workspace_right`).
+        ("resize_left", vec!["super+ctrl+shift+left"]),
+        ("resize_right", vec!["super+ctrl+shift+right"]),
         ("resize_up", vec!["super+alt+up"]),
         ("resize_down", vec!["super+alt+down"]),
+        ("workspace_left", vec!["super+left"]),
+        ("workspace_right", vec!["super+right"]),
+        ("move_workspace_left", vec!["super+alt+left"]),
+        ("move_workspace_right", vec!["super+alt+right"]),
         ("scale_up", vec!["super+shift+p"]),
         ("scale_down", vec!["super+shift+m"]),
         ("toggle_preview", vec!["super+shift+w"]),
@@ -279,6 +336,10 @@ pub fn known_actions() -> Vec<&'static str> {
         "resize_right",
         "resize_up",
         "resize_down",
+        "workspace_left",
+        "workspace_right",
+        "move_workspace_left",
+        "move_workspace_right",
         "scale_up",
         "scale_down",
         "toggle_preview",
@@ -343,6 +404,7 @@ impl Config {
                 top_bar: raw.top_bar,
                 shortcuts,
                 outputs: raw.outputs,
+                workspaces: raw.workspaces,
             };
         }
 
@@ -545,6 +607,7 @@ mod tests {
             top_bar: false,
             shortcuts,
             outputs: HashMap::new(),
+            workspaces: WorkspaceSettings::default(),
         };
 
         let mut merged = default_shortcuts();
@@ -648,6 +711,32 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(resolve_output_position(&settings, "HDMI-A-1", size(1920, 1080), &placed), (0, 0).into());
+    }
+
+    #[test]
+    fn workspace_settings_default_to_split_per_monitor() {
+        let raw: RawConfig = toml::from_str("").unwrap();
+        assert_eq!(raw.workspaces, WorkspaceSettings::default());
+        assert_eq!(raw.workspaces.mode, WorkspaceMode::PerMonitor);
+        assert_eq!(raw.workspaces.count, 4);
+        assert!(!raw.workspaces.dynamic);
+        assert!(raw.workspaces.overlay);
+    }
+
+    #[test]
+    fn workspace_settings_parse_from_config() {
+        let toml = r#"
+            [workspaces]
+            mode = "combined"
+            count = 6
+            dynamic = true
+            overlay = false
+        "#;
+        let raw: RawConfig = toml::from_str(toml).unwrap();
+        assert_eq!(raw.workspaces.mode, WorkspaceMode::Combined);
+        assert_eq!(raw.workspaces.count, 6);
+        assert!(raw.workspaces.dynamic);
+        assert!(!raw.workspaces.overlay);
     }
 
     #[test]

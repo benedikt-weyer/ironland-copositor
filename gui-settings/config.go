@@ -27,6 +27,19 @@ type AppearanceSettings struct {
 	DarkMode bool `toml:"dark_mode"`
 }
 
+// WorkspaceSettings mirrors `config::WorkspaceSettings` in the compositor:
+// how many virtual desktops exist, whether each output gets its own set or
+// every output shares one, whether the count grows/shrinks on demand, and
+// whether the on-screen dot indicator flashes on switch.
+type WorkspaceSettings struct {
+	// Mode is either "per_monitor" (each output has its own workspaces) or
+	// "combined" (every output shows the same workspace at once).
+	Mode    string `toml:"mode"`
+	Count   int    `toml:"count"`
+	Dynamic bool   `toml:"dynamic"`
+	Overlay bool   `toml:"overlay"`
+}
+
 // Config mirrors `config::Config` / `config::RawConfig` in the compositor,
 // plus the GUI-only Appearance settings above.
 type Config struct {
@@ -41,6 +54,7 @@ type Config struct {
 	Appearance AppearanceSettings        `toml:"appearance"`
 	Shortcuts  map[string][]string       `toml:"shortcuts"`
 	Outputs    map[string]OutputSettings `toml:"outputs"`
+	Workspaces WorkspaceSettings         `toml:"workspaces"`
 }
 
 // OutputPosition mirrors `config::OutputPosition` in the compositor: exactly
@@ -91,6 +105,10 @@ var knownActions = []string{
 	"resize_right",
 	"resize_up",
 	"resize_down",
+	"workspace_left",
+	"workspace_right",
+	"move_workspace_left",
+	"move_workspace_right",
 	"scale_up",
 	"scale_down",
 	"toggle_preview",
@@ -101,31 +119,35 @@ var knownActions = []string{
 
 // actionLabels gives each action a human-readable name for the GUI.
 var actionLabels = map[string]string{
-	"quit":               "Quit compositor",
-	"run_terminal":       "Open terminal",
-	"toggle_launcher":    "Toggle app launcher",
-	"open_browser":       "Open browser",
-	"open_file_manager":  "Open file manager",
-	"toggle_floating":    "Toggle floating/tiled",
-	"kill_window":        "Kill active window",
-	"focus_left":         "Focus window: left",
-	"focus_right":        "Focus window: right",
-	"focus_up":           "Focus window: up",
-	"focus_down":         "Focus window: down",
-	"swap_left":          "Swap window: left",
-	"swap_right":         "Swap window: right",
-	"swap_up":            "Swap window: up",
-	"swap_down":          "Swap window: down",
-	"resize_left":        "Resize tiled window: left",
-	"resize_right":       "Resize tiled window: right",
-	"resize_up":          "Resize tiled window: up",
-	"resize_down":        "Resize tiled window: down",
-	"scale_up":           "Increase output scale",
-	"scale_down":         "Decrease output scale",
-	"toggle_preview":     "Toggle window preview",
-	"rotate_output":      "Rotate output",
-	"toggle_tint":        "Toggle debug tint",
-	"toggle_decorations": "Toggle window decorations",
+	"quit":                 "Quit compositor",
+	"run_terminal":         "Open terminal",
+	"toggle_launcher":      "Toggle app launcher",
+	"open_browser":         "Open browser",
+	"open_file_manager":    "Open file manager",
+	"toggle_floating":      "Toggle floating/tiled",
+	"kill_window":          "Kill active window",
+	"focus_left":           "Focus window: left",
+	"focus_right":          "Focus window: right",
+	"focus_up":             "Focus window: up",
+	"focus_down":           "Focus window: down",
+	"swap_left":            "Swap window: left",
+	"swap_right":           "Swap window: right",
+	"swap_up":              "Swap window: up",
+	"swap_down":            "Swap window: down",
+	"resize_left":          "Resize tiled window: left",
+	"resize_right":         "Resize tiled window: right",
+	"resize_up":            "Resize tiled window: up",
+	"resize_down":          "Resize tiled window: down",
+	"workspace_left":       "Switch workspace: previous",
+	"workspace_right":      "Switch workspace: next",
+	"move_workspace_left":  "Move window to workspace: previous",
+	"move_workspace_right": "Move window to workspace: next",
+	"scale_up":             "Increase output scale",
+	"scale_down":           "Decrease output scale",
+	"toggle_preview":       "Toggle window preview",
+	"rotate_output":        "Rotate output",
+	"toggle_tint":          "Toggle debug tint",
+	"toggle_decorations":   "Toggle window decorations",
 }
 
 // defaultShortcuts is the baseline the compositor falls back to for any
@@ -133,31 +155,44 @@ var actionLabels = map[string]string{
 // `config::default_shortcuts` in src/config.rs.
 func defaultShortcuts() map[string][]string {
 	return map[string][]string{
-		"quit":               {"super+alt+backspace", "super+q"},
-		"run_terminal":       {"super+c"},
-		"toggle_launcher":    {"super"},
-		"open_browser":       {"super+b"},
-		"open_file_manager":  {"super+f"},
-		"toggle_floating":    {"super+shift+space"},
-		"kill_window":        {"super+x"},
-		"focus_left":         {"super+left"},
-		"focus_right":        {"super+right"},
-		"focus_up":           {"super+up"},
-		"focus_down":         {"super+down"},
-		"swap_left":          {"super+shift+left"},
-		"swap_right":         {"super+shift+right"},
-		"swap_up":            {"super+shift+up"},
-		"swap_down":          {"super+shift+down"},
-		"resize_left":        {"super+alt+left"},
-		"resize_right":       {"super+alt+right"},
-		"resize_up":          {"super+alt+up"},
-		"resize_down":        {"super+alt+down"},
-		"scale_up":           {"super+shift+p"},
-		"scale_down":         {"super+shift+m"},
-		"toggle_preview":     {"super+shift+w"},
-		"rotate_output":      {"super+shift+r"},
-		"toggle_tint":        {"super+shift+t"},
-		"toggle_decorations": {"super+shift+d"},
+		"quit":                 {"super+alt+backspace", "super+q"},
+		"run_terminal":         {"super+c"},
+		"toggle_launcher":      {"super"},
+		"open_browser":         {"super+b"},
+		"open_file_manager":    {"super+f"},
+		"toggle_floating":      {"super+shift+space"},
+		"kill_window":          {"super+x"},
+		"focus_left":           {"super+ctrl+left"},
+		"focus_right":          {"super+ctrl+right"},
+		"focus_up":             {"super+up"},
+		"focus_down":           {"super+down"},
+		"swap_left":            {"super+shift+left"},
+		"swap_right":           {"super+shift+right"},
+		"swap_up":              {"super+shift+up"},
+		"swap_down":            {"super+shift+down"},
+		"resize_left":          {"super+ctrl+shift+left"},
+		"resize_right":         {"super+ctrl+shift+right"},
+		"resize_up":            {"super+alt+up"},
+		"resize_down":          {"super+alt+down"},
+		"workspace_left":       {"super+left"},
+		"workspace_right":      {"super+right"},
+		"move_workspace_left":  {"super+alt+left"},
+		"move_workspace_right": {"super+alt+right"},
+		"scale_up":             {"super+shift+p"},
+		"scale_down":           {"super+shift+m"},
+		"toggle_preview":       {"super+shift+w"},
+		"rotate_output":        {"super+shift+r"},
+		"toggle_tint":          {"super+shift+t"},
+		"toggle_decorations":   {"super+shift+d"},
+	}
+}
+
+func defaultWorkspaceSettings() WorkspaceSettings {
+	return WorkspaceSettings{
+		Mode:    "per_monitor",
+		Count:   4,
+		Dynamic: false,
+		Overlay: true,
 	}
 }
 
@@ -168,6 +203,7 @@ func defaultConfig() Config {
 		FileManager: "iron-file",
 		Shortcuts:   defaultShortcuts(),
 		Outputs:     map[string]OutputSettings{},
+		Workspaces:  defaultWorkspaceSettings(),
 	}
 }
 
@@ -233,6 +269,9 @@ func loadConfig() (Config, string) {
 		}
 		if raw.Outputs != nil {
 			cfg.Outputs = raw.Outputs
+		}
+		if raw.Workspaces.Mode != "" {
+			cfg.Workspaces = raw.Workspaces
 		}
 		return cfg, path
 	}

@@ -447,6 +447,41 @@ impl LauncherState {
 
 const GLYPH_LINE_HEIGHT: i32 = crate::font::GLYPH_HEIGHT as i32;
 
+const WORKSPACE_DOT_SIZE: i32 = 12;
+const WORKSPACE_DOT_GAP: i32 = 10;
+const WORKSPACE_DOT_PADDING: i32 = 10;
+const WORKSPACE_DOT_ACTIVE: [u8; 4] = [235, 230, 225, 255];
+const WORKSPACE_DOT_INACTIVE: [u8; 4] = [110, 100, 92, 255];
+const WORKSPACE_DOT_BACKGROUND: [u8; 4] = [30, 26, 22, 220];
+
+/// The logical size of the workspace dot overlay for `count` workspaces.
+pub fn workspace_overlay_size(count: usize) -> Size<i32, Logical> {
+    let count = count.max(1) as i32;
+    let width = WORKSPACE_DOT_PADDING * 2 + count * WORKSPACE_DOT_SIZE + (count - 1).max(0) * WORKSPACE_DOT_GAP;
+    let height = WORKSPACE_DOT_PADDING * 2 + WORKSPACE_DOT_SIZE;
+    Size::from((width, height))
+}
+
+/// Rasterizes a row of dots - one per workspace, the active one highlighted -
+/// like GNOME's workspace switcher overlay.
+pub fn workspace_overlay_buffer(active: usize, count: usize) -> MemoryRenderBuffer {
+    let size = workspace_overlay_size(count);
+    let mut canvas = Canvas::new(size.w as usize, size.h as usize, WORKSPACE_DOT_BACKGROUND);
+    for i in 0..count.max(1) {
+        let x = WORKSPACE_DOT_PADDING + i as i32 * (WORKSPACE_DOT_SIZE + WORKSPACE_DOT_GAP);
+        let color = if i == active { WORKSPACE_DOT_ACTIVE } else { WORKSPACE_DOT_INACTIVE };
+        canvas.fill_rect(x, WORKSPACE_DOT_PADDING, WORKSPACE_DOT_SIZE, WORKSPACE_DOT_SIZE, color);
+    }
+    MemoryRenderBuffer::from_slice(
+        &canvas.pixels,
+        Fourcc::Argb8888,
+        (canvas.width as i32, canvas.height as i32),
+        1,
+        Transform::Normal,
+        None,
+    )
+}
+
 fn truncate(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         return s.to_string();

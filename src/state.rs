@@ -189,6 +189,12 @@ pub struct AnvilState<BackendData: Backend + 'static> {
     pub show_window_preview: bool,
     pub launcher: crate::drawing::LauncherState,
 
+    /// When the workspace dot overlay was last triggered (a switch or a
+    /// window move between workspaces), if `config.workspaces.overlay` is
+    /// on. Cleared implicitly once it's older than
+    /// [`crate::shell::workspace::OVERLAY_DURATION_MS`]; see the render loops.
+    pub workspace_overlay_shown: Option<std::time::Instant>,
+
     /// Resolved keybinding table, built once at startup from `config::Config`
     /// (see `input_handler::compile_keybindings`).
     pub(crate) keybindings: Vec<(crate::config::KeyModifiers, Keysym, crate::input_handler::KeyAction)>,
@@ -827,6 +833,7 @@ impl<BackendData: Backend + 'static> AnvilState<BackendData> {
             renderdoc: renderdoc::RenderDoc::new().ok(),
             show_window_preview: false,
             launcher: crate::drawing::LauncherState::default(),
+            workspace_overlay_shown: None,
             keybindings,
             super_tap_action,
             super_tap_pending: None,

@@ -995,6 +995,7 @@ impl AnvilState<UdevData> {
             output.set_preferred(wl_mode);
             output.change_current_state(Some(wl_mode), None, None, Some(position));
             self.space.map_output(&output, position);
+            crate::shell::workspace::init_output(&self.config, &self.space, &output);
 
             output.user_data().insert_if_missing(|| UdevOutputId {
                 crtc,
@@ -1525,6 +1526,13 @@ impl AnvilState<UdevData> {
                 buffer
             });
 
+        let workspace_overlay_shown = self.workspace_overlay_shown.filter(|shown_at| {
+            shown_at.elapsed().as_millis() < crate::shell::workspace::OVERLAY_DURATION_MS as u128
+        });
+        if workspace_overlay_shown.is_none() {
+            self.workspace_overlay_shown = None;
+        }
+
         let result = render_surface(
             surface,
             &mut renderer,
@@ -1537,6 +1545,7 @@ impl AnvilState<UdevData> {
             &mut self.cursor_status,
             self.show_window_preview,
             &mut self.launcher,
+            workspace_overlay_shown.is_some(),
         );
         let reschedule = match result {
             Ok((has_rendered, states)) => {
@@ -1619,6 +1628,7 @@ fn render_surface<'a>(
     cursor_status: &mut CursorImageStatus,
     show_window_preview: bool,
     launcher: &mut LauncherState,
+    show_workspace_overlay: bool,
 ) -> Result<(bool, RenderElementStates), SwapBuffersError> {
     let output_geometry = space.output_geometry(output).unwrap();
     let scale = Scale::from(output.current_scale().fractional_scale());
@@ -1712,7 +1722,30 @@ fn render_surface<'a>(
             None,
             Kind::Unspecified,
         ) {
-            custom_elements.push(CustomRenderElements::Launcher(element));
+            custom_elements.push(CustomRenderElements::Overlay(element));
+        }
+    }
+
+    if show_workspace_overlay {
+        let (active, count) = crate::shell::workspace::overlay_info(output);
+        let overlay_buffer = crate::drawing::workspace_overlay_buffer(active, count);
+        let overlay_size = crate::drawing::workspace_overlay_size(count);
+        let location = Point::<i32, Logical>::from((
+            (output_geometry.size.w - overlay_size.w) / 2,
+            output_geometry.size.h - overlay_size.h - 48,
+        ))
+        .to_f64()
+        .to_physical(scale);
+        if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            location,
+            &overlay_buffer,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        ) {
+            custom_elements.push(CustomRenderElements::Overlay(element));
         }
     }
 

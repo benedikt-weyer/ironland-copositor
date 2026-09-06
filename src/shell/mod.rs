@@ -52,6 +52,7 @@ pub mod tiling;
 #[cfg(feature = "xwayland")]
 mod x11;
 mod xdg;
+pub mod workspace;
 
 pub use self::element::*;
 pub use self::grabs::*;
@@ -392,12 +393,15 @@ fn ensure_initial_configure(surface: &WlSurface, space: &Space<WindowElement>, p
     };
 }
 
+/// Places a newly-created (non-tiled) window at a random location on the
+/// output under `pointer_location`, and returns that output (if any), so
+/// callers can register the window's workspace home.
 fn place_new_window(
     space: &mut Space<WindowElement>,
     pointer_location: Point<f64, Logical>,
     window: &WindowElement,
     activate: bool,
-) {
+) -> Option<Output> {
     // place the window at a random location on same output as pointer
     // or if there is not output in a [0;800]x[0;800] square
     use rand::distributions::{Distribution, Uniform};
@@ -408,6 +412,7 @@ fn place_new_window(
         .or_else(|| space.outputs().next())
         .cloned();
     let output_geometry = output
+        .clone()
         .and_then(|o| {
             let geo = space.output_geometry(&o)?;
             let map = layer_map_for_output(&o);
@@ -433,6 +438,7 @@ fn place_new_window(
     let y = y_range.sample(&mut rng);
 
     space.map_element(window.clone(), (x, y), activate);
+    output
 }
 
 pub fn fixup_positions(space: &mut Space<WindowElement>, pointer_location: Point<f64, Logical>) {
@@ -471,6 +477,8 @@ pub fn fixup_positions(space: &mut Space<WindowElement>, pointer_location: Point
         }
     }
     for window in orphaned_windows.into_iter() {
-        place_new_window(space, pointer_location, &window, false);
+        if let Some(output) = place_new_window(space, pointer_location, &window, false) {
+            workspace::assign_new_window(&window, &output, true);
+        }
     }
 }

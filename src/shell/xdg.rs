@@ -50,8 +50,9 @@ impl<BackendData: Backend> XdgShellHandler for AnvilState<BackendData> {
         let window = WindowElement(Window::new_wayland_window(surface.clone()));
         if tiling::should_tile(&window) {
             tiling::tile_new_window(self, &window, self.pointer.current_location());
-        } else {
-            place_new_window(&mut self.space, self.pointer.current_location(), &window, true);
+        } else if let Some(output) = place_new_window(&mut self.space, self.pointer.current_location(), &window, true)
+        {
+            super::workspace::assign_new_window(&window, &output, true);
         }
 
         compositor::add_post_commit_hook(surface.wl_surface(), |state: &mut Self, _, surface| {

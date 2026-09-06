@@ -5,7 +5,7 @@
 //! window collapses its sibling back into the parent's slot. Windows can be
 //! individually floated (`toggle_floating`) to opt out of the layout entirely.
 
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell, RefMut};
 
 use smithay::{
     desktop::{Space, layer_map_for_output},
@@ -16,6 +16,7 @@ use smithay::{
 
 use crate::{
     focus::KeyboardFocusTarget,
+    shell::workspace::WorkspaceState,
     state::{AnvilState, Backend},
 };
 
@@ -322,35 +323,79 @@ impl TilingLayout {
     }
 }
 
+/// Every one of an output's tiling trees, one per workspace, indexed by
+/// workspace number. Grows lazily as higher workspace indices are touched;
+/// entries are never removed (an empty [`TilingLayout`] is cheap and
+/// `retain_alive`/pruning elsewhere deals with staleness).
 #[derive(Default)]
-pub struct TilingState(pub RefCell<TilingLayout>);
+pub struct TilingState(RefCell<Vec<TilingLayout>>);
 
 impl TilingState {
-    pub fn get(output: &Output) -> &TilingState {
+    fn get(output: &Output) -> &TilingState {
         output.user_data().insert_if_missing(TilingState::default);
         output.user_data().get::<TilingState>().unwrap()
     }
+
+    fn ensure_len(&self, idx: usize) {
+        let mut v = self.0.borrow_mut();
+        if v.len() <= idx {
+            v.resize_with(idx + 1, TilingLayout::default);
+        }
+    }
+
+    /// Borrows workspace `idx`'s tiling tree for `output`, growing storage as needed.
+    pub fn tree(output: &Output, idx: usize) -> Ref<'_, TilingLayout> {
+        let state = Self::get(output);
+        state.ensure_len(idx);
+        Ref::map(state.0.borrow(), |v| &v[idx])
+    }
+
+    /// Mutably borrows workspace `idx`'s tiling tree for `output`, growing storage as needed.
+    pub fn tree_mut(output: &Output, idx: usize) -> RefMut<'_, TilingLayout> {
+        let state = Self::get(output);
+        state.ensure_len(idx);
+        RefMut::map(state.0.borrow_mut(), |v| &mut v[idx])
+    }
+
+    /// Every workspace's tiling tree for `output`, in workspace-index order.
+    pub fn all(output: &Output) -> Ref<'_, Vec<TilingLayout>> {
+        Self::get(output).0.borrow()
+    }
+
+    /// How many workspace slots have been touched for `output` so far.
+    pub fn len(output: &Output) -> usize {
+        Self::get(output).0.borrow().len()
+    }
 }
 
-fn tiling_area(space: &Space<WindowElement>, output: &Output) -> Rectangle<i32, Logical> {
+pub(crate) fn tiling_area(space: &Space<WindowElement>, output: &Output) -> Rectangle<i32, Logical> {
     let geo = space.output_geometry(output).unwrap_or_default();
     let map = layer_map_for_output(output);
     let zone = map.non_exclusive_zone();
     Rectangle::new(geo.loc + zone.loc, zone.size)
 }
 
-fn find_output_containing<BackendData: Backend>(
+/// Finds which output's tiling tree (and at which workspace index) contains
+/// `window`, searching every workspace, not just the active one - a window
+/// can be tiled on a hidden workspace (e.g. its client closed it in the
+/// background).
+pub(crate) fn locate<BackendData: Backend>(
     state: &AnvilState<BackendData>,
     window: &WindowElement,
-) -> Option<Output> {
-    state
-        .space
-        .outputs()
-        .find(|o| TilingState::get(o).0.borrow().contains(window))
-        .cloned()
+) -> Option<(Output, usize)> {
+    for output in state.space.outputs() {
+        for (idx, layout) in TilingState::all(output).iter().enumerate() {
+            if layout.contains(window) {
+                return Some((output.clone(), idx));
+            }
+        }
+    }
+    None
 }
 
-fn current_focused_window<BackendData: Backend>(state: &AnvilState<BackendData>) -> Option<WindowElement> {
+pub(crate) fn current_focused_window<BackendData: Backend>(
+    state: &AnvilState<BackendData>,
+) -> Option<WindowElement> {
     let keyboard = state.seat.get_keyboard()?;
     match keyboard.current_focus()? {
         KeyboardFocusTarget::Window(w) => Some(WindowElement(w)),
@@ -358,7 +403,7 @@ fn current_focused_window<BackendData: Backend>(state: &AnvilState<BackendData>)
     }
 }
 
-fn raise_and_focus<BackendData: Backend>(state: &mut AnvilState<BackendData>, window: &WindowElement) {
+pub(crate) fn raise_and_focus<BackendData: Backend>(state: &mut AnvilState<BackendData>, window: &WindowElement) {
     state.space.raise_element(window, true);
     if let Some(keyboard) = state.seat.get_keyboard() {
         let serial = SERIAL_COUNTER.next_serial();
@@ -366,10 +411,13 @@ fn raise_and_focus<BackendData: Backend>(state: &mut AnvilState<BackendData>, wi
     }
 }
 
-/// Re-flow every tiled window on `output` to match its current tree.
+/// Re-flow every tiled window on `output`'s *active* workspace to match its
+/// current tree. Hidden workspaces are left untouched (and are up to date
+/// whenever they're next shown by [`crate::shell::workspace`]).
 pub fn apply_layout<BackendData: Backend>(state: &mut AnvilState<BackendData>, output: &Output) {
+    let idx = WorkspaceState::get(output).active();
     let area = tiling_area(&state.space, output);
-    let rects = TilingState::get(output).0.borrow().layout(area);
+    let rects = TilingState::tree(output, idx).layout(area);
     for (window, rect) in rects {
         #[allow(irrefutable_let_patterns)]
         if let Some(toplevel) = window.0.toplevel() {
@@ -424,27 +472,33 @@ pub fn tile_new_window<BackendData: Backend>(
         return;
     };
 
-    let target = current_focused_window(state).filter(|w| TilingState::get(&output).0.borrow().contains(w));
+    let idx = WorkspaceState::get(&output).active();
+    let target = current_focused_window(state).filter(|w| TilingState::tree(&output, idx).contains(w));
+
+    crate::shell::workspace::assign_new_window(window, &output, false);
 
     let area = tiling_area(&state.space, &output);
-    TilingState::get(&output)
-        .0
-        .borrow_mut()
-        .insert(window.clone(), area, target.as_ref());
+    TilingState::tree_mut(&output, idx).insert(window.clone(), area, target.as_ref());
 
     apply_layout(state, &output);
     raise_and_focus(state, window);
 }
 
-/// Remove `window` from whichever output's tiling tree contains it, and
-/// re-flow the remaining windows. Returns `true` if it was tiled.
+/// Remove `window` from whichever output/workspace's tiling tree contains
+/// it (wherever that is - it need not be the active/visible one), and
+/// re-flow that output's active workspace if it was affected. The window
+/// becomes floating, tracked at the workspace it was pulled out of. Returns
+/// `true` if it was tiled.
 pub fn untile_window<BackendData: Backend>(state: &mut AnvilState<BackendData>, window: &WindowElement) -> bool {
-    let Some(output) = find_output_containing(state, window) else {
+    let Some((output, idx)) = locate(state, window) else {
         return false;
     };
-    let removed = TilingState::get(&output).0.borrow_mut().remove(window);
+    let removed = TilingState::tree_mut(&output, idx).remove(window);
     if removed {
-        apply_layout(state, &output);
+        crate::shell::workspace::mark_floating(state, window, &output, idx);
+        if idx == WorkspaceState::get(&output).active() {
+            apply_layout(state, &output);
+        }
     }
     removed
 }
@@ -466,15 +520,22 @@ pub fn retile_all_outputs<BackendData: Backend>(state: &mut AnvilState<BackendDa
     }
 }
 
-/// Drop dead windows from every output's tiling tree and re-flow the ones that changed.
+/// Drop dead windows from every output's tiling tree (every workspace, not
+/// just the active one) and re-flow whichever active workspaces changed.
 pub fn cleanup_dead<BackendData: Backend>(state: &mut AnvilState<BackendData>) {
     let outputs: Vec<Output> = state.space.outputs().cloned().collect();
-    for output in outputs {
-        let changed = TilingState::get(&output).0.borrow_mut().retain_alive();
-        if changed {
-            apply_layout(state, &output);
+    for output in &outputs {
+        let active = WorkspaceState::get(output).active();
+        let mut active_changed = false;
+        for idx in 0..TilingState::len(output) {
+            let changed = TilingState::tree_mut(output, idx).retain_alive();
+            active_changed |= changed && idx == active;
+        }
+        if active_changed {
+            apply_layout(state, output);
         }
     }
+    crate::shell::workspace::cleanup_dead(state);
 }
 
 /// Move keyboard focus to the tiled window neighboring the currently focused
@@ -483,11 +544,11 @@ pub fn focus_direction<BackendData: Backend>(state: &mut AnvilState<BackendData>
     let Some(focused) = current_focused_window(state) else {
         return;
     };
-    let Some(output) = find_output_containing(state, &focused) else {
+    let Some((output, idx)) = locate(state, &focused) else {
         return;
     };
     let area = tiling_area(&state.space, &output);
-    let rects = TilingState::get(&output).0.borrow().layout(area);
+    let rects = TilingState::tree(&output, idx).layout(area);
     if let Some(target) = neighbor(&rects, &focused, dir) {
         raise_and_focus(state, &target);
     }
@@ -498,15 +559,15 @@ pub fn swap_direction<BackendData: Backend>(state: &mut AnvilState<BackendData>,
     let Some(focused) = current_focused_window(state) else {
         return;
     };
-    let Some(output) = find_output_containing(state, &focused) else {
+    let Some((output, idx)) = locate(state, &focused) else {
         return;
     };
     let area = tiling_area(&state.space, &output);
-    let rects = TilingState::get(&output).0.borrow().layout(area);
+    let rects = TilingState::tree(&output, idx).layout(area);
     let Some(target) = neighbor(&rects, &focused, dir) else {
         return;
     };
-    TilingState::get(&output).0.borrow_mut().swap(&focused, &target);
+    TilingState::tree_mut(&output, idx).swap(&focused, &target);
     apply_layout(state, &output);
     raise_and_focus(state, &focused);
 }
@@ -516,16 +577,13 @@ pub fn resize_tiled<BackendData: Backend>(state: &mut AnvilState<BackendData>, d
     let Some(focused) = current_focused_window(state) else {
         return;
     };
-    let Some(output) = find_output_containing(state, &focused) else {
+    let Some((output, idx)) = locate(state, &focused) else {
         return;
     };
     let vertical = matches!(dir, Direction::Left | Direction::Right);
     let grow = matches!(dir, Direction::Right | Direction::Down);
     let delta = if grow { RESIZE_STEP } else { -RESIZE_STEP };
-    TilingState::get(&output)
-        .0
-        .borrow_mut()
-        .adjust_ratio(&focused, vertical, delta);
+    TilingState::tree_mut(&output, idx).adjust_ratio(&focused, vertical, delta);
     apply_layout(state, &output);
 }
 

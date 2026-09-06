@@ -203,6 +203,7 @@ pub fn run_winit() {
         .shm_state
         .update_formats(state.backend_data.backend.renderer().shm_formats());
     state.space.map_output(&output, (0, 0));
+    crate::shell::workspace::init_output(&state.config, &state.space, &output);
 
     #[cfg(feature = "xwayland")]
     state.start_xwayland();
@@ -276,6 +277,26 @@ pub fn run_winit() {
                 .to_f64()
                 .to_physical(scale)
             });
+
+            let workspace_overlay = state.workspace_overlay_shown.filter(|shown_at| {
+                shown_at.elapsed().as_millis() < crate::shell::workspace::OVERLAY_DURATION_MS as u128
+            });
+            let workspace_overlay_buffer_and_location = workspace_overlay.map(|_| {
+                let (active, count) = crate::shell::workspace::overlay_info(&output);
+                let buffer = crate::drawing::workspace_overlay_buffer(active, count);
+                let output_size = state.space.output_geometry(&output).unwrap().size;
+                let overlay_size = crate::drawing::workspace_overlay_size(count);
+                let location = Point::<i32, Logical>::from((
+                    (output_size.w - overlay_size.w) / 2,
+                    output_size.h - overlay_size.h - 48,
+                ))
+                .to_f64()
+                .to_physical(scale);
+                (buffer, location)
+            });
+            if workspace_overlay.is_none() {
+                state.workspace_overlay_shown = None;
+            }
 
             let full_redraw = &mut state.backend_data.full_redraw;
             *full_redraw = full_redraw.saturating_sub(1);
@@ -368,7 +389,21 @@ pub fn run_winit() {
                         None,
                         Kind::Unspecified,
                     ) {
-                        elements.push(CustomRenderElements::Launcher(element));
+                        elements.push(CustomRenderElements::Overlay(element));
+                    }
+                }
+
+                if let Some((buffer, location)) = &workspace_overlay_buffer_and_location {
+                    if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
+                        renderer,
+                        *location,
+                        buffer,
+                        None,
+                        None,
+                        None,
+                        Kind::Unspecified,
+                    ) {
+                        elements.push(CustomRenderElements::Overlay(element));
                     }
                 }
 

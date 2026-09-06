@@ -219,6 +219,16 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                 crate::shell::tiling::resize_tiled(self, dir);
             }
 
+            KeyAction::SwitchWorkspace(delta) => {
+                if let Some(output) = current_output_for_workspace_nav(self) {
+                    crate::shell::workspace::switch_workspace(self, &output, delta);
+                }
+            }
+
+            KeyAction::MoveWindowWorkspace(delta) => {
+                crate::shell::workspace::move_focused_window(self, delta);
+            }
+
             _ => unreachable!(
                 "Common key action handler encountered backend specific action {:?}",
                 action
@@ -770,7 +780,9 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                     | KeyAction::KillWindow
                     | KeyAction::FocusDirection(_)
                     | KeyAction::SwapDirection(_)
-                    | KeyAction::ResizeTiled(_) => self.process_common_key_action(action),
+                    | KeyAction::ResizeTiled(_)
+                    | KeyAction::SwitchWorkspace(_)
+                    | KeyAction::MoveWindowWorkspace(_) => self.process_common_key_action(action),
 
                     _ => tracing::warn!(
                         ?action,
@@ -1007,7 +1019,9 @@ impl AnvilState<UdevData> {
                     | KeyAction::KillWindow
                     | KeyAction::FocusDirection(_)
                     | KeyAction::SwapDirection(_)
-                    | KeyAction::ResizeTiled(_) => self.process_common_key_action(action),
+                    | KeyAction::ResizeTiled(_)
+                    | KeyAction::SwitchWorkspace(_)
+                    | KeyAction::MoveWindowWorkspace(_) => self.process_common_key_action(action),
 
                     _ => unreachable!(),
                 },
@@ -1543,6 +1557,10 @@ pub(crate) enum KeyAction {
     SwapDirection(crate::shell::tiling::Direction),
     /// Grow the focused tiled window towards a direction
     ResizeTiled(crate::shell::tiling::Direction),
+    /// Switch the active workspace by a relative step (-1 = previous, +1 = next)
+    SwitchWorkspace(i32),
+    /// Move the focused window to an adjacent workspace by a relative step
+    MoveWindowWorkspace(i32),
     /// Open or close the application launcher
     ToggleLauncher,
     /// Append a character to the launcher's search query
@@ -1574,6 +1592,28 @@ fn launcher_key_action(keysym: Keysym) -> KeyAction {
     }
 }
 
+/// The output workspace navigation/movement should act on: the output
+/// backing the currently focused window if there is one, else whichever
+/// output the pointer is over, else the first output.
+fn current_output_for_workspace_nav<BackendData: Backend>(
+    state: &AnvilState<BackendData>,
+) -> Option<smithay::output::Output> {
+    if let Some(keyboard) = state.seat.get_keyboard() {
+        if let Some(crate::focus::KeyboardFocusTarget::Window(w)) = keyboard.current_focus() {
+            let window = crate::shell::WindowElement(w);
+            if let Some(output) = state.space.outputs_for_element(&window).first().cloned() {
+                return Some(output);
+            }
+        }
+    }
+    state
+        .space
+        .output_under(state.pointer.current_location())
+        .next()
+        .or_else(|| state.space.outputs().next())
+        .cloned()
+}
+
 /// Turns a config action name (see `config::known_actions`) into the
 /// `KeyAction` it triggers. Kept in sync with `config::known_actions` and
 /// `config::default_shortcuts` by the test at the bottom of `config.rs`.
@@ -1600,6 +1640,10 @@ fn action_for_name(name: &str, terminal: &str, browser: &str, file_manager: &str
         "resize_right" => KeyAction::ResizeTiled(Direction::Right),
         "resize_up" => KeyAction::ResizeTiled(Direction::Up),
         "resize_down" => KeyAction::ResizeTiled(Direction::Down),
+        "workspace_left" => KeyAction::SwitchWorkspace(-1),
+        "workspace_right" => KeyAction::SwitchWorkspace(1),
+        "move_workspace_left" => KeyAction::MoveWindowWorkspace(-1),
+        "move_workspace_right" => KeyAction::MoveWindowWorkspace(1),
         "scale_up" => KeyAction::ScaleUp,
         "scale_down" => KeyAction::ScaleDown,
         "toggle_preview" => KeyAction::TogglePreview,

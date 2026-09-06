@@ -27,6 +27,7 @@ func main() {
 	keyboardTab := buildKeyboardTab(&cfg)
 	shortcutsTab := buildShortcutsTab(&cfg)
 	outputsTab := buildOutputsTab(&cfg, w)
+	workspacesTab := buildWorkspacesTab(&cfg)
 	appearanceTab := buildAppearanceTab(&cfg, w)
 
 	status := widget.NewLabel(statusText(loadedFrom))
@@ -46,6 +47,7 @@ func main() {
 		container.NewTabItem("Keyboard", keyboardTab),
 		container.NewTabItem("Shortcuts", shortcutsTab),
 		container.NewTabItem("Monitors", outputsTab),
+		container.NewTabItem("Workspaces", workspacesTab),
 		container.NewTabItem("Appearance", appearanceTab),
 	)
 
@@ -176,6 +178,67 @@ func buildAppearanceTab(cfg *Config, w fyne.Window) fyne.CanvasObject {
 	hint.Wrapping = fyne.TextWrapWord
 
 	return container.NewVBox(darkMode, hint)
+}
+
+// buildWorkspacesTab lays out the virtual-desktop settings: split-per-monitor
+// vs. combined-across-monitors, the starting workspace count, whether that
+// count grows/shrinks on demand, and the on-screen dot overlay toggle.
+func buildWorkspacesTab(cfg *Config) fyne.CanvasObject {
+	if cfg.Workspaces.Mode == "" {
+		cfg.Workspaces = defaultWorkspaceSettings()
+	}
+
+	modeLabels := map[string]string{
+		"per_monitor": "Split per monitor (each screen has its own workspaces)",
+		"combined":    "Combined across monitors (every screen shows the same workspace)",
+	}
+	modeSelect := widget.NewSelect(
+		[]string{modeLabels["per_monitor"], modeLabels["combined"]},
+		func(selected string) {
+			if selected == modeLabels["combined"] {
+				cfg.Workspaces.Mode = "combined"
+			} else {
+				cfg.Workspaces.Mode = "per_monitor"
+			}
+		},
+	)
+	modeSelect.SetSelected(modeLabels[cfg.Workspaces.Mode])
+
+	count := widget.NewEntry()
+	count.SetText(fmt.Sprintf("%d", cfg.Workspaces.Count))
+	count.OnChanged = func(s string) {
+		var n int
+		if _, err := fmt.Sscanf(s, "%d", &n); err == nil && n > 0 {
+			cfg.Workspaces.Count = n
+		}
+	}
+
+	dynamic := widget.NewCheck("Grow/shrink workspace count automatically", func(checked bool) {
+		cfg.Workspaces.Dynamic = checked
+	})
+	dynamic.SetChecked(cfg.Workspaces.Dynamic)
+
+	overlay := widget.NewCheck("Show workspace indicator dots on switch", func(checked bool) {
+		cfg.Workspaces.Overlay = checked
+	})
+	overlay.SetChecked(cfg.Workspaces.Overlay)
+
+	form := widget.NewForm(
+		widget.NewFormItem("Layout", modeSelect),
+		widget.NewFormItem("Starting workspace count", count),
+		widget.NewFormItem("Dynamic count", dynamic),
+		widget.NewFormItem("On-screen overlay", overlay),
+	)
+
+	hint := widget.NewLabel(
+		"Switch workspaces with Super+Left/Right, and move the focused window to an adjacent workspace" +
+			" with Super+Alt+Left/Right (both rebindable in the Shortcuts tab). With \"Dynamic count\" on," +
+			" navigating or moving a window past the last workspace creates a new one, and empty trailing" +
+			" workspaces are dropped again automatically; otherwise the count above is fixed.",
+	)
+	hint.Wrapping = fyne.TextWrapWord
+
+	return container.NewVBox(form, hint)
 }
 
 func splitKeyCombos(s string) []string {

@@ -31,7 +31,10 @@ smithay::backend::renderer::element::render_elements! {
         R: ImportAll + ImportMem;
     Pointer=PointerRenderElement<R>,
     Surface=WaylandSurfaceRenderElement<R>,
-    Launcher=MemoryRenderBufferRenderElement<R>,
+    // Shared by every compositor-drawn, software-rasterized screen overlay
+    // (the launcher and the workspace-switcher dots): they're all just a
+    // `MemoryRenderBuffer` placed at some location, so one variant covers them.
+    Overlay=MemoryRenderBufferRenderElement<R>,
     #[cfg(feature = "debug")]
     // Note: We would like to borrow this element instead, but that would introduce
     // a feature-dependent lifetime, which introduces a lot more feature bounds
@@ -45,7 +48,7 @@ impl<R: Renderer> std::fmt::Debug for CustomRenderElements<R> {
         match self {
             Self::Pointer(arg0) => f.debug_tuple("Pointer").field(arg0).finish(),
             Self::Surface(arg0) => f.debug_tuple("Surface").field(arg0).finish(),
-            Self::Launcher(arg0) => f.debug_tuple("Launcher").field(arg0).finish(),
+            Self::Overlay(arg0) => f.debug_tuple("Overlay").field(arg0).finish(),
             #[cfg(feature = "debug")]
             Self::Fps(arg0) => f.debug_tuple("Fps").field(arg0).finish(),
             Self::_GenericCatcher(arg0) => f.debug_tuple("_GenericCatcher").field(arg0).finish(),
