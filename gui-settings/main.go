@@ -134,7 +134,7 @@ func buildShortcutsTab(cfg *Config) fyne.CanvasObject {
 	hint := widget.NewLabel("Separate multiple key combos for the same action with commas. A combo is modifiers and a key joined with '+', e.g. \"ctrl+alt+left\".")
 	hint.Wrapping = fyne.TextWrapWord
 
-	return container.NewBorder(nil, hint, nil, nil, container.NewVScroll(form))
+	return container.NewBorder(nil, hint, nil, nil, container.NewVScroll(container.NewVBox(form)))
 }
 
 func splitKeyCombos(s string) []string {
