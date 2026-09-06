@@ -163,6 +163,8 @@ pub struct Keybinding {
 struct RawConfig {
     keyboard: KeyboardSettings,
     terminal: Option<String>,
+    browser: Option<String>,
+    file_manager: Option<String>,
     top_bar: bool,
     shortcuts: HashMap<String, Vec<String>>,
     outputs: HashMap<String, OutputSettings>,
@@ -172,6 +174,10 @@ struct RawConfig {
 pub struct Config {
     pub keyboard: KeyboardSettings,
     pub terminal: String,
+    /// Command spawned by the `open_browser` action.
+    pub browser: String,
+    /// Command spawned by the `open_file_manager` action.
+    pub file_manager: String,
     /// Whether windows may get a compositor-drawn header bar ("top bar") for
     /// server-side decoration. Off by default: a client's request for
     /// server-side decoration is overridden back to client-side (see
@@ -193,6 +199,8 @@ impl Default for Config {
         Config {
             keyboard: KeyboardSettings::default(),
             terminal: default_terminal(),
+            browser: default_browser(),
+            file_manager: default_file_manager(),
             top_bar: false,
             shortcuts: default_shortcuts(),
             outputs: HashMap::new(),
@@ -204,6 +212,14 @@ fn default_terminal() -> String {
     "weston-terminal".to_string()
 }
 
+fn default_browser() -> String {
+    "brave".to_string()
+}
+
+fn default_file_manager() -> String {
+    "iron-file".to_string()
+}
+
 /// The shortcuts the compositor shipped with before it became configurable.
 /// Kept as the baseline so an empty/missing/partial config file still
 /// behaves exactly as before.
@@ -211,7 +227,9 @@ fn default_shortcuts() -> HashMap<String, Vec<String>> {
     [
         ("quit", vec!["super+alt+backspace", "super+q"]),
         ("run_terminal", vec!["super+c"]),
-        ("toggle_launcher", vec!["super+space"]),
+        ("toggle_launcher", vec!["super"]),
+        ("open_browser", vec!["super+b"]),
+        ("open_file_manager", vec!["super+f"]),
         ("toggle_floating", vec!["super+shift+space"]),
         ("kill_window", vec!["super+x"]),
         ("focus_left", vec!["super+left"]),
@@ -245,6 +263,8 @@ pub fn known_actions() -> Vec<&'static str> {
         "quit",
         "run_terminal",
         "toggle_launcher",
+        "open_browser",
+        "open_file_manager",
         "toggle_floating",
         "kill_window",
         "focus_left",
@@ -318,6 +338,8 @@ impl Config {
             return Config {
                 keyboard: raw.keyboard,
                 terminal: raw.terminal.unwrap_or_else(default_terminal),
+                browser: raw.browser.unwrap_or_else(default_browser),
+                file_manager: raw.file_manager.unwrap_or_else(default_file_manager),
                 top_bar: raw.top_bar,
                 shortcuts,
                 outputs: raw.outputs,
@@ -356,6 +378,14 @@ impl Config {
             }
 
             for spec in specs {
+                // A bare modifier name (no `+`, e.g. `"super"`) isn't a
+                // modifiers+key combo at all - it's handled separately by
+                // `super_tap_action`, so skip it here rather than reporting
+                // it as an unparseable combo.
+                if is_bare_modifier_tap(spec) {
+                    continue;
+                }
+
                 match parse_binding(spec) {
                     Some((modifiers, keysym)) => bindings.push(Keybinding {
                         modifiers,
@@ -369,6 +399,40 @@ impl Config {
 
         bindings
     }
+
+    /// The action bound to a bare Super key tap (pressed and released with no
+    /// other key in between - see `input_handler`'s tap tracking), if any is
+    /// configured. Only one action can meaningfully fire on a Super tap, so
+    /// if more than one action lists a bare `"super"` spec, the first found
+    /// (in arbitrary map order) wins and the rest are ignored with a warning.
+    pub fn super_tap_action(&self) -> Option<&str> {
+        let known = known_actions();
+        let mut found: Option<&str> = None;
+
+        for (action, specs) in &self.shortcuts {
+            if !specs.iter().any(|spec| is_bare_modifier_tap(spec)) {
+                continue;
+            }
+            if !known.contains(&action.as_str()) {
+                warn!(action, "Unknown action bound to a bare Super tap, ignoring");
+                continue;
+            }
+            if let Some(existing) = found {
+                warn!(action, existing, "Multiple actions bound to a bare Super tap, ignoring this one");
+                continue;
+            }
+            found = Some(action.as_str());
+        }
+
+        found
+    }
+}
+
+/// Whether `spec` names a modifier on its own (no `+`), meaning "trigger on
+/// a tap of this modifier alone" rather than a modifiers+key combo. Only the
+/// Super/logo modifier is meaningful here today.
+fn is_bare_modifier_tap(spec: &str) -> bool {
+    matches!(spec.trim().to_ascii_lowercase().as_str(), "super" | "logo" | "meta" | "win")
 }
 
 /// Parses a binding spec like `"ctrl+shift+left"` into its modifiers and
@@ -456,9 +520,17 @@ mod tests {
     fn every_default_shortcut_parses() {
         for (action, specs) in default_shortcuts() {
             for spec in specs {
+                if is_bare_modifier_tap(&spec) {
+                    continue;
+                }
                 assert!(parse_binding(&spec).is_some(), "default binding {action}={spec} failed to parse");
             }
         }
+    }
+
+    #[test]
+    fn default_toggle_launcher_is_a_bare_super_tap() {
+        assert_eq!(Config::default().super_tap_action(), Some("toggle_launcher"));
     }
 
     #[test]
@@ -468,6 +540,8 @@ mod tests {
         let raw = RawConfig {
             keyboard: KeyboardSettings::default(),
             terminal: None,
+            browser: None,
+            file_manager: None,
             top_bar: false,
             shortcuts,
             outputs: HashMap::new(),
@@ -477,7 +551,7 @@ mod tests {
         merged.extend(raw.shortcuts);
 
         assert_eq!(merged["quit"], vec!["ctrl+alt+q"]);
-        assert_eq!(merged["toggle_launcher"], vec!["super+space"]);
+        assert_eq!(merged["toggle_launcher"], vec!["super"]);
     }
 
     fn size(w: i32, h: i32) -> Size<i32, Logical> {

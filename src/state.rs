@@ -193,6 +193,14 @@ pub struct AnvilState<BackendData: Backend + 'static> {
     /// (see `input_handler::compile_keybindings`).
     pub(crate) keybindings: Vec<(crate::config::KeyModifiers, Keysym, crate::input_handler::KeyAction)>,
 
+    /// Action to fire when the Super key is tapped alone (see
+    /// `config::Config::super_tap_action`), if one is configured.
+    pub(crate) super_tap_action: Option<crate::input_handler::KeyAction>,
+    /// `Some(true)` while Super is held and no other key has been pressed
+    /// since, meaning it's still a candidate bare tap; `Some(false)` once
+    /// another key has broken that; `None` while Super isn't held.
+    pub(crate) super_tap_pending: Option<bool>,
+
     /// User-facing settings loaded at startup (see [`crate::config::Config`]),
     /// kept around so backends can consult output placement/mirroring/primary
     /// settings as monitors connect.
@@ -675,6 +683,7 @@ impl<BackendData: Backend + 'static> AnvilState<BackendData> {
 
         let config = crate::config::Config::load();
         let keybindings = crate::input_handler::compile_keybindings(&config);
+        let super_tap_action = crate::input_handler::compile_super_tap_action(&config);
 
         // init wayland clients
         let socket_name = if listen_on_socket {
@@ -819,6 +828,8 @@ impl<BackendData: Backend + 'static> AnvilState<BackendData> {
             show_window_preview: false,
             launcher: crate::drawing::LauncherState::default(),
             keybindings,
+            super_tap_action,
+            super_tap_pending: None,
             config,
         }
     }

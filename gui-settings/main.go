@@ -96,6 +96,16 @@ func buildKeyboardTab(cfg *Config) fyne.CanvasObject {
 	terminal.SetPlaceHolder("command run by the \"Open terminal\" shortcut")
 	terminal.OnChanged = func(s string) { cfg.Terminal = s }
 
+	browser := widget.NewEntry()
+	browser.SetText(cfg.Browser)
+	browser.SetPlaceHolder("command run by the \"Open browser\" shortcut")
+	browser.OnChanged = func(s string) { cfg.Browser = s }
+
+	fileManager := widget.NewEntry()
+	fileManager.SetText(cfg.FileManager)
+	fileManager.SetPlaceHolder("command run by the \"Open file manager\" shortcut")
+	fileManager.OnChanged = func(s string) { cfg.FileManager = s }
+
 	topBar := widget.NewCheck("", func(checked bool) { cfg.TopBar = checked })
 	topBar.SetChecked(cfg.TopBar)
 
@@ -106,6 +116,8 @@ func buildKeyboardTab(cfg *Config) fyne.CanvasObject {
 		widget.NewFormItem("Options", options),
 		widget.NewFormItem("Rules", rules),
 		widget.NewFormItem("Terminal command", terminal),
+		widget.NewFormItem("Browser command", browser),
+		widget.NewFormItem("File manager command", fileManager),
 		widget.NewFormItem("Show top bar", topBar),
 	)
 

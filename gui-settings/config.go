@@ -30,8 +30,10 @@ type AppearanceSettings struct {
 // Config mirrors `config::Config` / `config::RawConfig` in the compositor,
 // plus the GUI-only Appearance settings above.
 type Config struct {
-	Keyboard KeyboardSettings `toml:"keyboard"`
-	Terminal string           `toml:"terminal"`
+	Keyboard    KeyboardSettings `toml:"keyboard"`
+	Terminal    string           `toml:"terminal"`
+	Browser     string           `toml:"browser"`
+	FileManager string           `toml:"file_manager"`
 	// TopBar controls whether windows may get a compositor-drawn header
 	// bar for server-side decoration. Off by default: a client's request
 	// for server-side decoration is overridden back to client-side.
@@ -73,6 +75,8 @@ var knownActions = []string{
 	"quit",
 	"run_terminal",
 	"toggle_launcher",
+	"open_browser",
+	"open_file_manager",
 	"toggle_floating",
 	"kill_window",
 	"focus_left",
@@ -100,6 +104,8 @@ var actionLabels = map[string]string{
 	"quit":               "Quit compositor",
 	"run_terminal":       "Open terminal",
 	"toggle_launcher":    "Toggle app launcher",
+	"open_browser":       "Open browser",
+	"open_file_manager":  "Open file manager",
 	"toggle_floating":    "Toggle floating/tiled",
 	"kill_window":        "Kill active window",
 	"focus_left":         "Focus window: left",
@@ -129,7 +135,9 @@ func defaultShortcuts() map[string][]string {
 	return map[string][]string{
 		"quit":               {"super+alt+backspace", "super+q"},
 		"run_terminal":       {"super+c"},
-		"toggle_launcher":    {"super+space"},
+		"toggle_launcher":    {"super"},
+		"open_browser":       {"super+b"},
+		"open_file_manager":  {"super+f"},
 		"toggle_floating":    {"super+shift+space"},
 		"kill_window":        {"super+x"},
 		"focus_left":         {"super+left"},
@@ -155,9 +163,11 @@ func defaultShortcuts() map[string][]string {
 
 func defaultConfig() Config {
 	return Config{
-		Terminal:  "weston-terminal",
-		Shortcuts: defaultShortcuts(),
-		Outputs:   map[string]OutputSettings{},
+		Terminal:    "weston-terminal",
+		Browser:     "brave",
+		FileManager: "iron-file",
+		Shortcuts:   defaultShortcuts(),
+		Outputs:     map[string]OutputSettings{},
 	}
 }
 

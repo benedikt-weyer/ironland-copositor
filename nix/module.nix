@@ -14,7 +14,9 @@ in
       startup (a restart is needed to pick up changes). See the
       compositor's `src/config.rs` for the full schema: keyboard layout
       under `keyboard` (passed straight through to xkbcommon), the
-      terminal launched by the `run_terminal` shortcut under `terminal`,
+      terminal launched by the `run_terminal` shortcut under `terminal`, the
+      browser/file manager launched by `open_browser`/`open_file_manager`
+      under `browser`/`file_manager`,
       `top_bar` (whether windows may get a compositor-drawn header/title
       bar for server-side decoration; off by default, so a client's request
       for one is overridden back to client-side), key bindings under
@@ -39,7 +41,7 @@ in
         shortcuts = {
           # Overrides just this one binding; every other shortcut keeps
           # its built-in default.
-          toggle_launcher = [ "super+space" ];
+          open_browser = [ "super+b" ];
         };
         outputs = {
           "eDP-1".primary = true;

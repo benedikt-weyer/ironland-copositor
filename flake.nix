@@ -144,9 +144,12 @@
             # `nix/module.nix` and `src/config.rs`): `weston-terminal` (the
             # hardcoded default before this became configurable) isn't even
             # installed in this VM, so without this override ctrl+return
-            # would silently fail to spawn a terminal.
+            # would silently fail to spawn a terminal. Likewise the default
+            # `browser` command ("brave") isn't installed below - only
+            # firefox is - so super+b needs the same kind of override.
             services.ironland-copositor.settings = {
               terminal = "alacritty";
+              browser = "firefox";
               keyboard.layout = "us";
             };
 

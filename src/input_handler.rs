@@ -276,6 +276,31 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                     "keysym"
                 );
 
+                // Track whether Super is being tapped alone (pressed and
+                // released with no other key in between), to fire the
+                // configured `super_tap_action` (see `config::Config::
+                // super_tap_action`). The Super key itself is always
+                // forwarded to the focused client like any other modifier
+                // key - only a successful tap's release is intercepted, the
+                // same trade-off other compositors make for this feature.
+                if is_super_keysym(keysym) {
+                    return if let KeyState::Pressed = state {
+                        if data.super_tap_pending.is_none() {
+                            data.super_tap_pending = Some(true);
+                        }
+                        FilterResult::Forward
+                    } else {
+                        let was_tap = data.super_tap_pending == Some(true);
+                        data.super_tap_pending = None;
+                        match (was_tap, inhibited, &data.super_tap_action) {
+                            (true, false, Some(action)) => FilterResult::Intercept(action.clone()),
+                            _ => FilterResult::Forward,
+                        }
+                    };
+                } else if let KeyState::Pressed = state {
+                    data.super_tap_pending = Some(false);
+                }
+
                 // While the launcher overlay is open it grabs the whole keyboard:
                 // every key is consumed here instead of being forwarded to the
                 // focused client, whether or not it maps to a launcher action.
@@ -1552,13 +1577,15 @@ fn launcher_key_action(keysym: Keysym) -> KeyAction {
 /// Turns a config action name (see `config::known_actions`) into the
 /// `KeyAction` it triggers. Kept in sync with `config::known_actions` and
 /// `config::default_shortcuts` by the test at the bottom of `config.rs`.
-fn action_for_name(name: &str, terminal: &str) -> Option<KeyAction> {
+fn action_for_name(name: &str, terminal: &str, browser: &str, file_manager: &str) -> Option<KeyAction> {
     use crate::shell::tiling::Direction;
 
     Some(match name {
         "quit" => KeyAction::Quit,
         "run_terminal" => KeyAction::Run(terminal.to_string()),
         "toggle_launcher" => KeyAction::ToggleLauncher,
+        "open_browser" => KeyAction::Run(browser.to_string()),
+        "open_file_manager" => KeyAction::Run(file_manager.to_string()),
         "toggle_floating" => KeyAction::ToggleFloating,
         "kill_window" => KeyAction::KillWindow,
         "focus_left" => KeyAction::FocusDirection(Direction::Left),
@@ -1593,7 +1620,7 @@ pub(crate) fn compile_keybindings(
         .parsed_keybindings()
         .into_iter()
         .filter_map(|binding| {
-            match action_for_name(&binding.action, &config.terminal) {
+            match action_for_name(&binding.action, &config.terminal, &config.browser, &config.file_manager) {
                 Some(action) => Some((binding.modifiers, binding.keysym, action)),
                 None => {
                     // `parsed_keybindings` already validated the name against
@@ -1605,6 +1632,26 @@ pub(crate) fn compile_keybindings(
             }
         })
         .collect()
+}
+
+/// Resolves the `KeyAction` to fire on a bare Super key tap (see
+/// [`crate::config::Config::super_tap_action`]), if one is configured.
+/// Called once at startup alongside `compile_keybindings`.
+pub(crate) fn compile_super_tap_action(config: &crate::config::Config) -> Option<KeyAction> {
+    let action_name = config.super_tap_action()?;
+    match action_for_name(action_name, &config.terminal, &config.browser, &config.file_manager) {
+        Some(action) => Some(action),
+        None => {
+            error!(action = action_name, "No KeyAction for a known config action name");
+            None
+        }
+    }
+}
+
+/// Whether `keysym` is one of the physical Super/logo keys, used to detect a
+/// bare Super tap (see `config::Config::super_tap_action`).
+fn is_super_keysym(keysym: Keysym) -> bool {
+    matches!(keysym, Keysym::Super_L | Keysym::Super_R)
 }
 
 /// The dynamic shortcuts that aren't representable as a single fixed
