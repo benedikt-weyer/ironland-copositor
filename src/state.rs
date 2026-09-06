@@ -497,9 +497,14 @@ impl<BackendData: Backend> XdgDecorationHandler for AnvilState<BackendData> {
     fn request_mode(&mut self, toplevel: ToplevelSurface, mode: DecorationMode) {
         use xdg_decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
 
+        // `top_bar` is the user's global switch for the compositor-drawn
+        // window header bar. With it off, a client asking for server-side
+        // decoration is overridden back to client-side so the header bar
+        // never appears, no matter what individual clients request.
+        let allow_ssd = self.config.top_bar;
         toplevel.with_pending_state(|state| {
             state.decoration_mode = Some(match mode {
-                DecorationMode::ServerSide => Mode::ServerSide,
+                DecorationMode::ServerSide if allow_ssd => Mode::ServerSide,
                 _ => Mode::ClientSide,
             });
         });

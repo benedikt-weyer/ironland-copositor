@@ -172,10 +172,11 @@ struct RawConfig {
 pub struct Config {
     pub keyboard: KeyboardSettings,
     pub terminal: String,
-    /// Whether an external top bar/shell (e.g. noctalia-shell) should be
-    /// started alongside the compositor. Off by default: the compositor
-    /// itself never draws one, so this only matters to launch scripts that
-    /// check it. See `nix/module.nix` for how the NixOS module uses it.
+    /// Whether windows may get a compositor-drawn header bar ("top bar") for
+    /// server-side decoration. Off by default: a client's request for
+    /// server-side decoration is overridden back to client-side (see
+    /// [`crate::state::AnvilState`]'s `XdgDecorationHandler` impl), so no
+    /// header bar is drawn regardless of what individual clients ask for.
     pub top_bar: bool,
     /// action name -> key combos, e.g. `"toggle_launcher" -> ["ctrl+space"]`.
     /// Always fully populated: entries not overridden by the config file

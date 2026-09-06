@@ -15,8 +15,10 @@ in
       compositor's `src/config.rs` for the full schema: keyboard layout
       under `keyboard` (passed straight through to xkbcommon), the
       terminal launched by the `run_terminal` shortcut under `terminal`,
-      `top_bar` (whether to autostart an external top bar/shell such as
-      noctalia-shell; off by default), key bindings under `shortcuts` —
+      `top_bar` (whether windows may get a compositor-drawn header/title
+      bar for server-side decoration; off by default, so a client's request
+      for one is overridden back to client-side), key bindings under
+      `shortcuts` —
       only the actions you set there override the built-in defaults, so a
       partial table is fine — and
       per-monitor settings under `outputs.<connector-name>` (e.g.

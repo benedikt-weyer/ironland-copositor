@@ -30,8 +30,11 @@ type AppearanceSettings struct {
 // Config mirrors `config::Config` / `config::RawConfig` in the compositor,
 // plus the GUI-only Appearance settings above.
 type Config struct {
-	Keyboard   KeyboardSettings          `toml:"keyboard"`
-	Terminal   string                    `toml:"terminal"`
+	Keyboard KeyboardSettings `toml:"keyboard"`
+	Terminal string           `toml:"terminal"`
+	// TopBar controls whether windows may get a compositor-drawn header
+	// bar for server-side decoration. Off by default: a client's request
+	// for server-side decoration is overridden back to client-side.
 	TopBar     bool                      `toml:"top_bar"`
 	Appearance AppearanceSettings        `toml:"appearance"`
 	Shortcuts  map[string][]string       `toml:"shortcuts"`

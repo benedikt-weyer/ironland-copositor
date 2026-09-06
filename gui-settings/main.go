@@ -109,7 +109,7 @@ func buildKeyboardTab(cfg *Config) fyne.CanvasObject {
 		widget.NewFormItem("Show top bar", topBar),
 	)
 
-	hint := widget.NewLabel("Keyboard fields are passed straight to xkbcommon; leave a field empty to use its system default. The top bar (an external shell such as noctalia-shell) is off by default.")
+	hint := widget.NewLabel("Keyboard fields are passed straight to xkbcommon; leave a field empty to use its system default. The top bar is the compositor-drawn window header/title bar; it's off by default, so windows get no server-side decoration no matter what they request.")
 	hint.Wrapping = fyne.TextWrapWord
 
 	return container.NewVBox(form, hint)

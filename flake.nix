@@ -185,6 +185,9 @@
               # up the caelestia (quickshell) shell from here once its socket
               # exists. Polling the runtime dir for it is simpler than
               # scraping stdout for the "Listening on wayland socket" log line.
+              # (`top_bar` in the compositor's own config is a different
+              # thing now: it's the compositor's own window header bar, not
+              # this shell, so it doesn't gate this.)
               runtime_dir="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
               socket=""
               for _ in $(seq 1 100); do
@@ -193,24 +196,7 @@
                 sleep 0.1
               done
 
-              # Mirrors the compositor's own config search order (src/config.rs)
-              # so the bar's autostart agrees with whatever `top_bar` the
-              # compositor itself is honoring. Off unless a config file
-              # explicitly sets `top_bar = true`.
-              config_file=""
-              for candidate in "''${IRONLAND_COMPOSITOR_CONFIG:-}" "''${XDG_CONFIG_HOME:-$HOME/.config}/ironland-copositor/config.toml" "/etc/ironland-copositor/config.toml"; do
-                if [ -n "$candidate" ] && [ -f "$candidate" ]; then
-                  config_file="$candidate"
-                  break
-                fi
-              done
-
-              top_bar_enabled=false
-              if [ -n "$config_file" ] && grep -Eq '^[[:space:]]*top_bar[[:space:]]*=[[:space:]]*true[[:space:]]*(#.*)?$' "$config_file"; then
-                top_bar_enabled=true
-              fi
-
-              if [ -n "$socket" ] && [ "$top_bar_enabled" = true ]; then
+              if [ -n "$socket" ]; then
                 WAYLAND_DISPLAY=$(basename "$socket") ${pkgs.caelestia-shell}/bin/caelestia-shell &
               fi
 
