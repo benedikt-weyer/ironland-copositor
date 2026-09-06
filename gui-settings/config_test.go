@@ -24,6 +24,7 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 	cfg.Keyboard.Variant = "nodeadkeys"
 	cfg.Terminal = "alacritty"
 	cfg.TopBar = true
+	cfg.Appearance.DarkMode = true
 	cfg.Shortcuts["quit"] = []string{"ctrl+alt+q"}
 
 	path, err := saveConfig(cfg)
@@ -46,6 +47,9 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 	}
 	if !loaded.TopBar {
 		t.Fatalf("loadConfig topBar = %v, want true", loaded.TopBar)
+	}
+	if !loaded.Appearance.DarkMode {
+		t.Fatalf("loadConfig appearance.darkMode = %v, want true", loaded.Appearance.DarkMode)
 	}
 	if !reflect.DeepEqual(loaded.Shortcuts["quit"], []string{"ctrl+alt+q"}) {
 		t.Fatalf("loadConfig shortcuts[quit] = %v", loaded.Shortcuts["quit"])

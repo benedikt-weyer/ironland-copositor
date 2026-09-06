@@ -19,13 +19,23 @@ type KeyboardSettings struct {
 	Options string `toml:"options"`
 }
 
-// Config mirrors `config::Config` / `config::RawConfig` in the compositor.
+// AppearanceSettings is GUI-only state: the compositor itself has no notion
+// of a color scheme, so this isn't mirrored in config::Config on the Rust
+// side (its TOML parser ignores tables it doesn't know about). It's kept in
+// the same config.toml purely so the GUI remembers the toggle across runs.
+type AppearanceSettings struct {
+	DarkMode bool `toml:"dark_mode"`
+}
+
+// Config mirrors `config::Config` / `config::RawConfig` in the compositor,
+// plus the GUI-only Appearance settings above.
 type Config struct {
-	Keyboard  KeyboardSettings          `toml:"keyboard"`
-	Terminal  string                    `toml:"terminal"`
-	TopBar    bool                      `toml:"top_bar"`
-	Shortcuts map[string][]string       `toml:"shortcuts"`
-	Outputs   map[string]OutputSettings `toml:"outputs"`
+	Keyboard   KeyboardSettings          `toml:"keyboard"`
+	Terminal   string                    `toml:"terminal"`
+	TopBar     bool                      `toml:"top_bar"`
+	Appearance AppearanceSettings        `toml:"appearance"`
+	Shortcuts  map[string][]string       `toml:"shortcuts"`
+	Outputs    map[string]OutputSettings `toml:"outputs"`
 }
 
 // OutputPosition mirrors `config::OutputPosition` in the compositor: exactly
@@ -203,6 +213,7 @@ func loadConfig() (Config, string) {
 			cfg.Terminal = raw.Terminal
 		}
 		cfg.TopBar = raw.TopBar
+		cfg.Appearance = raw.Appearance
 		cfg.Keyboard = raw.Keyboard
 		for action, keys := range raw.Shortcuts {
 			cfg.Shortcuts[action] = keys

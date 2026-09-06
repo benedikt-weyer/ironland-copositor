@@ -488,6 +488,16 @@ mod tests {
     }
 
     #[test]
+    fn unknown_tables_are_ignored() {
+        // `[appearance]` is written by the settings GUI for its own
+        // dark-mode toggle, which the compositor itself has no use for.
+        // Serde's default behavior (no `deny_unknown_fields`) is what makes
+        // this safe to add there without needing a matching field here.
+        let raw: Result<RawConfig, _> = toml::from_str("[appearance]\ndark_mode = true\n");
+        assert!(raw.is_ok(), "unexpected parse error: {:?}", raw.err());
+    }
+
+    #[test]
     fn top_bar_defaults_to_disabled_but_can_be_enabled() {
         let raw: RawConfig = toml::from_str("").unwrap();
         assert!(!raw.top_bar);

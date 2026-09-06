@@ -27,6 +27,7 @@ func main() {
 	keyboardTab := buildKeyboardTab(&cfg)
 	shortcutsTab := buildShortcutsTab(&cfg)
 	outputsTab := buildOutputsTab(&cfg, w)
+	appearanceTab := buildAppearanceTab(&cfg, w)
 
 	status := widget.NewLabel(statusText(loadedFrom))
 	status.Wrapping = fyne.TextWrapWord
@@ -45,6 +46,7 @@ func main() {
 		container.NewTabItem("Keyboard", keyboardTab),
 		container.NewTabItem("Shortcuts", shortcutsTab),
 		container.NewTabItem("Monitors", outputsTab),
+		container.NewTabItem("Appearance", appearanceTab),
 	)
 
 	content := container.NewBorder(nil, container.NewVBox(status, saveButton), nil, nil, tabs)
@@ -139,6 +141,29 @@ func buildShortcutsTab(cfg *Config) fyne.CanvasObject {
 	hint.Wrapping = fyne.TextWrapWord
 
 	return container.NewBorder(nil, hint, nil, nil, container.NewVScroll(container.NewVBox(form)))
+}
+
+// buildAppearanceTab holds the dark/light mode toggle. Unlike the other
+// tabs, flipping it takes effect immediately (via setSystemColorScheme)
+// rather than waiting for Save, since it's a live system-wide preference and
+// not just something the compositor reads back at its next start.
+func buildAppearanceTab(cfg *Config, w fyne.Window) fyne.CanvasObject {
+	darkMode := widget.NewCheck("Dark mode", func(checked bool) {
+		cfg.Appearance.DarkMode = checked
+		if err := setSystemColorScheme(checked); err != nil {
+			dialog.ShowError(fmt.Errorf("setting system color scheme: %w", err), w)
+		}
+	})
+	darkMode.SetChecked(cfg.Appearance.DarkMode)
+
+	hint := widget.NewLabel(
+		"Applies immediately (and is also saved to config.toml so this toggle remembers its state)." +
+			" This sets the same GNOME setting that xdg-desktop-portal-gtk exposes as the org.freedesktop.appearance color scheme," +
+			" so portal-aware apps pick it up too; it has no effect without xdg-desktop-portal-gtk (or gsettings) installed.",
+	)
+	hint.Wrapping = fyne.TextWrapWord
+
+	return container.NewVBox(darkMode, hint)
 }
 
 func splitKeyCombos(s string) []string {

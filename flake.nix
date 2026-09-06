@@ -86,7 +86,7 @@
           version = "0.1.0";
           src = ./gui-settings;
           vendorHash = "sha256-IhRYaTLleaHKfqmicA8rYOdiEW41J7CxLIWKld4Ez0Q=";
-          nativeBuildInputs = [ pkgs.pkg-config ];
+          nativeBuildInputs = [ pkgs.pkg-config pkgs.makeWrapper ];
           buildInputs = guiSettingsBuildInputs;
           # The compositor has no XWayland, so Fyne's default glfw backend
           # (X11-only unless told otherwise) can't create a window at all -
@@ -95,6 +95,12 @@
           # WAYLAND_DISPLAY. This tag switches go-gl/glfw to its native
           # Wayland backend instead.
           tags = [ "wayland" ];
+          # The appearance tab's dark-mode toggle shells out to `gsettings`
+          # (see gui-settings/appearance.go) rather than linking against
+          # glib, so it just needs the binary on PATH.
+          postFixup = ''
+            wrapProgram $out/bin/gui-settings --prefix PATH : ${pkgs.glib}/bin
+          '';
         };
 
         devShells.default = pkgs.mkShell {
